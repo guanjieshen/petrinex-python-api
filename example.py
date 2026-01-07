@@ -47,13 +47,9 @@ def main():
     print("EXAMPLE 2: Load data with progress tracking")
     print("="*70)
     
-    df = client.read_spark_df(
-        "2025-12-01",  # Change as needed
-        pandas_read_kwargs={
-            "dtype": str,           # Avoid mixed-type issues
-            "encoding": "latin1"    # Handle special characters
-        }
-    )
+    # Load data - sensible defaults already configured!
+    # (dtype=str, encoding="latin1", on_bad_lines="skip", engine="python")
+    df = client.read_spark_df("2025-12-01")  # Change date as needed
     
     # Cache for reuse
     df.cache()

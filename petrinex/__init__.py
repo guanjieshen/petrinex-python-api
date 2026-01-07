@@ -10,16 +10,12 @@ Usage:
     client = PetrinexVolumetricsClient(spark=spark, jurisdiction="AB")
     
     # For Spark DataFrame (recommended for large data):
-    df = client.read_spark_df(
-        "2025-12-01",
-        pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
-    )
+    df = client.read_spark_df("2025-12-01")
     
     # For pandas DataFrame (for smaller data):
-    pdf = client.read_pandas_df(
-        "2025-12-01",
-        pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
-    )
+    pdf = client.read_pandas_df("2025-12-01")
+    
+    # Automatic optimizations for Petrinex CSV files built-in!
 """
 
 from petrinex.client import PetrinexVolumetricsClient, PetrinexFile

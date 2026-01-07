@@ -154,7 +154,6 @@ class PetrinexVolumetricsClient:
     def read_spark_df(
         self,
         updated_after: str,
-        pandas_read_kwargs: Optional[Dict] = None,
         add_provenance_columns: bool = True,
         union_by_name: bool = True,
     ) -> DataFrame:
@@ -166,23 +165,30 @@ class PetrinexVolumetricsClient:
 
         Parameters
         ----------
-        pandas_read_kwargs:
-          passed to pd.read_csv (e.g. {"dtype": str} to avoid mixed-type issues)
-        union_by_name:
+        updated_after : str
+            Date string "YYYY-MM-DD" - only files updated after this date
+        add_provenance_columns : bool, default True
+            Add production_month, file_updated_ts, source_url columns
+        union_by_name : bool, default True
           If True, aligns columns across months (handles schema drift). Missing cols become null.
+
+        Returns
+        -------
+        pyspark.sql.DataFrame
+            Unioned Spark DataFrame with all loaded files
 
         Notes
         -----
-        - No explicit disk writes.
-        - Memory efficient: unions DataFrames incrementally as they're loaded.
-        - Automatic checkpointing every 10 files to avoid long lineage.
-        - Skips files that return 404 errors (not yet published).
-        - Shows progress for each file loaded.
+        - Optimized defaults for Petrinex CSV files (dtype=str, encoding="latin1", etc.)
+        - No explicit disk writes
+        - Memory efficient: unions DataFrames incrementally as they're loaded
+        - Automatic checkpointing every 10 files to avoid long lineage
+        - Skips files that return 404 errors (not yet published)
+        - Shows progress for each file loaded
         """
         if self.file_format != "CSV":
             raise ValueError("Pandas mode supports CSV only. Set file_format='CSV'.")
 
-        pandas_read_kwargs = pandas_read_kwargs or {}
         files = self.list_updated_after(updated_after)
         if not files:
             raise ValueError(
@@ -204,17 +210,13 @@ class PetrinexVolumetricsClient:
                 # Extract CSV from ZIP (handle nested ZIPs)
                 csv_data = self._extract_csv_from_zip(r.content)
                 
-                # Set default pandas read options for robustness
-                encoding = pandas_read_kwargs.pop("encoding", "latin1")
-                on_bad_lines = pandas_read_kwargs.pop("on_bad_lines", "skip")
-                engine = pandas_read_kwargs.pop("engine", "python")
-
+                # Optimized defaults for Petrinex CSV files
                 pdf = pd.read_csv(
                     io.BytesIO(csv_data),
-                    encoding=encoding,
-                    on_bad_lines=on_bad_lines,
-                    engine=engine,
-                    **pandas_read_kwargs,
+                    dtype=str,              # Avoid mixed-type issues
+                    encoding="latin1",      # Handle special characters
+                    on_bad_lines="skip",    # Handle malformed rows
+                    engine="python",        # Robust parsing
                 )
 
                 if add_provenance_columns:
@@ -246,7 +248,7 @@ class PetrinexVolumetricsClient:
                 if e.response.status_code == 404:
                     # File not found - skip it (may not be published yet)
                     skipped_files.append((f.production_month, "File not found (404)"))
-                    print(f"⚠️  Not found (404)") 
+                    print(f"⚠️  Not found (404)")
                     continue
                 else:
                     # Other HTTP errors - re-raise
@@ -255,6 +257,8 @@ class PetrinexVolumetricsClient:
                 # Log other errors but continue
                 skipped_files.append((f.production_month, str(e)))
                 print(f"⚠️  Error: {str(e)[:60]}")
+                continue
+
                 continue
 
         
@@ -279,7 +283,6 @@ class PetrinexVolumetricsClient:
     def read_pandas_df(
         self,
         updated_after: str,
-        pandas_read_kwargs: Optional[Dict] = None,
         add_provenance_columns: bool = True,
     ) -> pd.DataFrame:
         """
@@ -292,8 +295,6 @@ class PetrinexVolumetricsClient:
         ----------
         updated_after : str
             Date string "YYYY-MM-DD" - only files updated after this date
-        pandas_read_kwargs : dict, optional
-            Options passed to pd.read_csv (e.g. {"dtype": str, "encoding": "latin1"})
         add_provenance_columns : bool, default True
             Add production_month, file_updated_ts, source_url columns
             
@@ -304,13 +305,13 @@ class PetrinexVolumetricsClient:
             
         Notes
         -----
+        - Optimized defaults for Petrinex CSV files (dtype=str, encoding="latin1", etc.)
         - Driver-memory bound: suitable for moderate amounts of data
         - For large datasets, use read_spark_df instead
         """
         if self.file_format != "CSV":
             raise ValueError("Pandas mode supports CSV only. Set file_format='CSV'.")
         
-        pandas_read_kwargs = pandas_read_kwargs or {}
         files = self.list_updated_after(updated_after)
         if not files:
             raise ValueError(
@@ -332,17 +333,13 @@ class PetrinexVolumetricsClient:
                 # Extract CSV from ZIP (handle nested ZIPs)
                 csv_data = self._extract_csv_from_zip(r.content)
                 
-                # Set default pandas read options for robustness
-                encoding = pandas_read_kwargs.pop("encoding", "latin1")
-                on_bad_lines = pandas_read_kwargs.pop("on_bad_lines", "skip")
-                engine = pandas_read_kwargs.pop("engine", "python")
-                
+                # Optimized defaults for Petrinex CSV files
                 pdf = pd.read_csv(
                     io.BytesIO(csv_data),
-                    encoding=encoding,
-                    on_bad_lines=on_bad_lines,
-                    engine=engine,
-                    **pandas_read_kwargs,
+                    dtype=str,              # Avoid mixed-type issues
+                    encoding="latin1",      # Handle special characters
+                    on_bad_lines="skip",    # Handle malformed rows
+                    engine="python",        # Robust parsing
                 )
                 
                 if add_provenance_columns:
@@ -359,7 +356,7 @@ class PetrinexVolumetricsClient:
                     skipped_files.append((f.production_month, "File not found (404)"))
                     print(f"⚠️  Not found (404)")
                     continue
-                else:
+            else:
                     raise
             except Exception as e:
                 skipped_files.append((f.production_month, str(e)))
@@ -396,15 +393,17 @@ class PetrinexVolumetricsClient:
         DEPRECATED: Use read_spark_df() instead.
         
         This method is kept for backward compatibility.
+        The pandas_read_kwargs parameter is ignored (sensible defaults are now built-in).
         """
         import warnings
         warnings.warn(
             "read_updated_after_as_spark_df_via_pandas() is deprecated. "
-            "Use read_spark_df() instead.",
+            "Use read_spark_df() instead. "
+            "Note: pandas_read_kwargs parameter is now ignored.",
             DeprecationWarning,
             stacklevel=2
         )
-        return self.read_spark_df(updated_after, pandas_read_kwargs, add_provenance_columns, union_by_name)
+        return self.read_spark_df(updated_after, add_provenance_columns, union_by_name)
 
     # -----------------------------
     # Internals

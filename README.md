@@ -20,11 +20,8 @@ from petrinex import PetrinexVolumetricsClient
 
 client = PetrinexVolumetricsClient(spark=spark, jurisdiction="AB")
 
-# Returns Spark DataFrame
-df = client.read_spark_df(
-    "2025-12-01",
-    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
-)
+# Returns Spark DataFrame (sensible defaults already set)
+df = client.read_spark_df("2025-12-01")
 
 df.show()
 ```
@@ -80,20 +77,13 @@ client = PetrinexVolumetricsClient(
 
 **Spark DataFrame (recommended for large data):**
 ```python
-df = client.read_spark_df(
-    "2025-12-01",
-    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
-)
-# Returns: Spark DataFrame
+# Sensible defaults already configured - just specify the date!
+df = client.read_spark_df("2025-12-01")
 ```
 
 **Pandas DataFrame (for smaller data):**
 ```python
-df = client.read_pandas_df(
-    "2025-12-01",
-    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
-)
-# Returns: pandas DataFrame
+pdf = client.read_pandas_df("2025-12-01")
 ```
 
 **Progress shown automatically:**
@@ -103,6 +93,13 @@ Loading 2/60: 2021-02... ✓ (498,832 rows)
 ...
 ✓ Successfully loaded 60 file(s)
 ```
+
+**Automatic optimizations:**
+- All Petrinex CSV quirks handled automatically
+- `dtype=str` - Avoids mixed-type issues
+- `encoding="latin1"` - Handles special characters
+- `on_bad_lines="skip"` - Handles malformed rows
+- `engine="python"` - Robust parsing
 
 ### List Files
 
@@ -159,10 +156,7 @@ Automatically handles:
 from datetime import datetime, timedelta
 
 six_months_ago = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
-df = client.read_spark_df(
-    six_months_ago,
-    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
-)
+df = client.read_spark_df(six_months_ago)
 ```
 
 ### Incremental Updates
@@ -172,20 +166,14 @@ df = client.read_spark_df(
 last_update = spark.sql("SELECT MAX(file_updated_ts) FROM petrinex.volumetrics").first()[0]
 
 # Load only new files
-df_new = client.read_spark_df(
-    last_update.split()[0],
-    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
-)
+df_new = client.read_spark_df(last_update.split()[0])
 ```
 
 ### Use Pandas DataFrame
 
 ```python
 # For smaller datasets or local analysis
-pdf = client.read_pandas_df(
-    "2025-12-01",
-    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
-)
+pdf = client.read_pandas_df("2025-12-01")
 
 # Now it's a pandas DataFrame
 pdf.head()
@@ -234,7 +222,10 @@ MIT License - see [LICENSE](LICENSE)
   - ✅ Renamed: `read_updated_after_as_spark_df_via_pandas()` → `read_spark_df()`
   - ✅ New: `read_pandas_df()` method for pandas DataFrame output
   - ✅ Old method kept as deprecated alias (backward compatible)
-- Improved: Simpler API, clearer naming
+- **Improved UX:**
+  - ✅ Sensible defaults now automatic - no need to specify `pandas_read_kwargs`
+  - ✅ Simpler API: `client.read_spark_df("2025-12-01")` just works!
+  - ✅ Automatic handling of Petrinex CSV quirks (encoding, malformed rows, types)
 
 ### v0.1.0
 - Initial release
