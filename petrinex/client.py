@@ -7,6 +7,7 @@ from datetime import datetime
 import io
 import re
 from typing import Dict, List, Optional
+import zipfile
 
 import pandas as pd
 import requests
@@ -189,9 +190,19 @@ class PetrinexVolumetricsClient:
             r = requests.get(f.url, timeout=self.request_timeout_s)
             r.raise_for_status()
 
+            # Extract CSV from ZIP (handle nested ZIPs)
+            csv_data = self._extract_csv_from_zip(r.content)
+            
+            # Set default pandas read options for robustness
+            encoding = pandas_read_kwargs.pop("encoding", "latin1")
+            on_bad_lines = pandas_read_kwargs.pop("on_bad_lines", "skip")
+            engine = pandas_read_kwargs.pop("engine", "python")
+            
             pdf = pd.read_csv(
-                io.BytesIO(r.content),
-                encoding=pandas_read_kwargs.pop("encoding", "latin1"),
+                io.BytesIO(csv_data),
+                encoding=encoding,
+                on_bad_lines=on_bad_lines,
+                engine=engine,
                 **pandas_read_kwargs,
             )
 
@@ -216,6 +227,31 @@ class PetrinexVolumetricsClient:
     # -----------------------------
     # Internals
     # -----------------------------
+    def _extract_csv_from_zip(self, zip_content: bytes) -> bytes:
+        """
+        Recursively extract CSV from potentially nested ZIP files.
+        Petrinex files are typically double-zipped (ZIP within ZIP).
+        """
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_content)) as zf:
+                for name in zf.namelist():
+                    file_data = zf.read(name)
+                    
+                    # Check if it's another ZIP (nested)
+                    if name.lower().endswith('.zip'):
+                        return self._extract_csv_from_zip(file_data)
+                    
+                    # Check if it's a CSV (case-insensitive)
+                    elif name.lower().endswith('.csv'):
+                        return file_data
+            
+            # If no CSV found, raise error
+            raise ValueError("No CSV file found in ZIP archive")
+        
+        except zipfile.BadZipFile:
+            # If it's not a ZIP, assume it's already CSV data
+            return zip_content
+    
     def _build_download_url(self, ym: str) -> str:
         # Example: https://www.petrinex.gov.ab.ca/publicdata/API/Files/AB/Vol/2025-09/CSV
         return f"{self.files_base_url}/{self.jurisdiction}/Vol/{ym}/{self.file_format}"

@@ -272,10 +272,11 @@ print(f"✅ Loaded {df.count():,} records")
 
 ## File Format Notes
 
-- 📦 Petrinex files are **double-zipped** (ZIP within ZIP)
+- 📦 Petrinex files are **double-zipped** (ZIP within ZIP) - **automatically handled**
 - 📝 CSV files use **uppercase extension** (.CSV)
 - 💾 Files can be **large** (100+ MB uncompressed)
 - 🔄 Schema may vary slightly across months (handled by `union_by_name`)
+- 🛡️ Malformed CSV lines are **automatically skipped** (no manual intervention needed)
 
 ## Troubleshooting
 
@@ -288,17 +289,18 @@ df = client.read_updated_after_as_spark_df_via_pandas(...)
 
 ### Error: "Mixed type column detected"
 
-**Solution:** Set all columns to string type:
-```python
-pandas_read_kwargs={"dtype": str}
-```
+**Solution:** Already handled by default with `dtype: str` setting.
 
 ### Error: "UnicodeDecodeError"
 
-**Solution:** Use latin1 encoding:
-```python
-pandas_read_kwargs={"encoding": "latin1"}
-```
+**Solution:** Already handled by default with `encoding: "latin1"` setting.
+
+### Error: "Buffer overflow" or "Error tokenizing data"
+
+**Solution:** Already handled automatically! The client:
+- ✅ Extracts CSV from nested ZIP files
+- ✅ Skips malformed lines with `on_bad_lines='skip'`
+- ✅ Uses Python parser for better error handling
 
 ### Memory Issues with Large Date Ranges
 
