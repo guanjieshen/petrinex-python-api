@@ -9,11 +9,12 @@ Usage:
     
     client = PetrinexVolumetricsClient(spark=spark, jurisdiction="AB")
     
-    # For Spark DataFrame (recommended for large data):
-    df = client.read_spark_df("2025-12-01")
+    # For Spark DataFrame - two date options:
+    df = client.read_spark_df(updated_after="2025-12-01")      # Incremental updates
+    df = client.read_spark_df(from_date="2021-01-01")          # All historical data
     
-    # For pandas DataFrame (for smaller data):
-    pdf = client.read_pandas_df("2025-12-01")
+    # For pandas DataFrame:
+    pdf = client.read_pandas_df(updated_after="2025-12-01")
     
     # Automatic optimizations for Petrinex CSV files built-in!
 """

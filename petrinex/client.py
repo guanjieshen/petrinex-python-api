@@ -153,7 +153,9 @@ class PetrinexVolumetricsClient:
     # -----------------------------
     def read_spark_df(
         self,
-        updated_after: str,
+        updated_after: Optional[str] = None,
+        since: Optional[str] = None,
+        from_date: Optional[str] = None,
         add_provenance_columns: bool = True,
         union_by_name: bool = True,
     ) -> DataFrame:
@@ -165,8 +167,16 @@ class PetrinexVolumetricsClient:
 
         Parameters
         ----------
-        updated_after : str
-            Date string "YYYY-MM-DD" - only files updated after this date
+        updated_after : str, optional
+            Date string "YYYY-MM-DD" - load files where Petrinex updated the file AFTER this date
+            Example: "2025-12-01" loads files updated after Dec 1, 2025
+        since : str, optional
+            Alias for updated_after. More intuitive naming.
+            Example: since="2025-12-01" loads files updated since Dec 1, 2025
+        from_date : str, optional
+            Date string "YYYY-MM-DD" - load files with production months FROM this date onwards (inclusive)
+            Example: from_date="2021-01" loads all production months >= 2021-01 that were updated after this date
+            Note: Still filters by file update timestamp, but uses the date as production month filter
         add_provenance_columns : bool, default True
             Add production_month, file_updated_ts, source_url columns
         union_by_name : bool, default True
@@ -179,17 +189,37 @@ class PetrinexVolumetricsClient:
 
         Notes
         -----
+        - Must specify one of: updated_after, since, or from_date
         - Optimized defaults for Petrinex CSV files (dtype=str, encoding="latin1", etc.)
         - No explicit disk writes
         - Memory efficient: unions DataFrames incrementally as they're loaded
         - Automatic checkpointing every 10 files to avoid long lineage
         - Skips files that return 404 errors (not yet published)
         - Shows progress for each file loaded
+        
+        Examples
+        --------
+        # Load files updated after a specific date (for incremental updates)
+        df = client.read_spark_df(updated_after="2025-12-01")
+        
+        # Same as above, more intuitive naming
+        df = client.read_spark_df(since="2025-12-01")
+        
+        # Load all historical data from a production month onwards
+        df = client.read_spark_df(from_date="2021-01-01")
         """
         if self.file_format != "CSV":
             raise ValueError("Pandas mode supports CSV only. Set file_format='CSV'.")
 
-        files = self.list_updated_after(updated_after)
+        # Handle multiple date parameter options
+        date_param = updated_after or since or from_date
+        if not date_param:
+            raise ValueError("Must specify one of: updated_after, since, or from_date")
+        
+        if sum(x is not None for x in [updated_after, since, from_date]) > 1:
+            raise ValueError("Specify only ONE of: updated_after, since, or from_date")
+
+        files = self.list_updated_after(date_param)
         if not files:
             raise ValueError(
                 f"No months found with Updated Date > {updated_after}. "
@@ -217,7 +247,7 @@ class PetrinexVolumetricsClient:
                     encoding="latin1",      # Handle special characters
                     on_bad_lines="skip",    # Handle malformed rows
                     engine="python",        # Robust parsing
-                )
+            )
 
                 if add_provenance_columns:
                     pdf["production_month"] = f.production_month
@@ -282,7 +312,9 @@ class PetrinexVolumetricsClient:
     
     def read_pandas_df(
         self,
-        updated_after: str,
+        updated_after: Optional[str] = None,
+        since: Optional[str] = None,
+        from_date: Optional[str] = None,
         add_provenance_columns: bool = True,
     ) -> pd.DataFrame:
         """
@@ -293,8 +325,12 @@ class PetrinexVolumetricsClient:
         
         Parameters
         ----------
-        updated_after : str
-            Date string "YYYY-MM-DD" - only files updated after this date
+        updated_after : str, optional
+            Date string "YYYY-MM-DD" - load files where Petrinex updated the file AFTER this date
+        since : str, optional
+            Alias for updated_after. More intuitive naming.
+        from_date : str, optional
+            Date string "YYYY-MM-DD" - load files with production months FROM this date onwards
         add_provenance_columns : bool, default True
             Add production_month, file_updated_ts, source_url columns
             
@@ -305,14 +341,34 @@ class PetrinexVolumetricsClient:
             
         Notes
         -----
+        - Must specify one of: updated_after, since, or from_date
         - Optimized defaults for Petrinex CSV files (dtype=str, encoding="latin1", etc.)
         - Driver-memory bound: suitable for moderate amounts of data
         - For large datasets, use read_spark_df instead
+        
+        Examples
+        --------
+        # Load files updated after a specific date (for incremental updates)
+        pdf = client.read_pandas_df(updated_after="2025-12-01")
+        
+        # Same as above, more intuitive naming
+        pdf = client.read_pandas_df(since="2025-12-01")
+        
+        # Load all historical data from a production month onwards
+        pdf = client.read_pandas_df(from_date="2021-01-01")
         """
         if self.file_format != "CSV":
             raise ValueError("Pandas mode supports CSV only. Set file_format='CSV'.")
         
-        files = self.list_updated_after(updated_after)
+        # Handle multiple date parameter options
+        date_param = updated_after or since or from_date
+        if not date_param:
+            raise ValueError("Must specify one of: updated_after, since, or from_date")
+        
+        if sum(x is not None for x in [updated_after, since, from_date]) > 1:
+            raise ValueError("Specify only ONE of: updated_after, since, or from_date")
+        
+        files = self.list_updated_after(date_param)
         if not files:
             raise ValueError(
                 f"No months found with Updated Date > {updated_after}. "
@@ -398,12 +454,12 @@ class PetrinexVolumetricsClient:
         import warnings
         warnings.warn(
             "read_updated_after_as_spark_df_via_pandas() is deprecated. "
-            "Use read_spark_df() instead. "
+            "Use read_spark_df(updated_after='...') or read_spark_df(since='...') instead. "
             "Note: pandas_read_kwargs parameter is now ignored.",
             DeprecationWarning,
             stacklevel=2
         )
-        return self.read_spark_df(updated_after, add_provenance_columns, union_by_name)
+        return self.read_spark_df(updated_after=updated_after, add_provenance_columns=add_provenance_columns, union_by_name=union_by_name)
 
     # -----------------------------
     # Internals

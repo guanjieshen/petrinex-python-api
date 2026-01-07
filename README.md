@@ -20,8 +20,11 @@ from petrinex import PetrinexVolumetricsClient
 
 client = PetrinexVolumetricsClient(spark=spark, jurisdiction="AB")
 
-# Returns Spark DataFrame (sensible defaults already set)
-df = client.read_spark_df("2025-12-01")
+# Load files updated after a date (for incremental updates)
+df = client.read_spark_df(updated_after="2025-12-01")
+
+# Or load all data from a production month onwards
+df = client.read_spark_df(from_date="2021-01-01")
 
 df.show()
 ```
@@ -75,15 +78,24 @@ client = PetrinexVolumetricsClient(
 
 ### Load Data
 
+**Two ways to specify dates:**
+
+```python
+# 1. Load files updated AFTER a date (for incremental updates)
+df = client.read_spark_df(updated_after="2025-12-01")
+
+# 2. Load ALL historical data from a date onwards
+df = client.read_spark_df(from_date="2021-01-01")
+```
+
 **Spark DataFrame (recommended for large data):**
 ```python
-# Sensible defaults already configured - just specify the date!
-df = client.read_spark_df("2025-12-01")
+df = client.read_spark_df(updated_after="2025-12-01")
 ```
 
 **Pandas DataFrame (for smaller data):**
 ```python
-pdf = client.read_pandas_df("2025-12-01")
+pdf = client.read_pandas_df(updated_after="2025-12-01")
 ```
 
 **Progress shown automatically:**
@@ -156,24 +168,31 @@ Automatically handles:
 from datetime import datetime, timedelta
 
 six_months_ago = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
-df = client.read_spark_df(six_months_ago)
+df = client.read_spark_df(updated_after=six_months_ago)
 ```
 
-### Incremental Updates
+### Incremental Updates (based on last file update)
 
 ```python
-# Get last update from existing table
+# Get last update timestamp from existing table
 last_update = spark.sql("SELECT MAX(file_updated_ts) FROM petrinex.volumetrics").first()[0]
 
-# Load only new files
-df_new = client.read_spark_df(last_update.split()[0])
+# Load only files updated after this timestamp
+df_new = client.read_spark_df(updated_after=last_update.split()[0])
+```
+
+### All Historical Data (from a production month)
+
+```python
+# Load all production months from 2020 onwards
+df_historical = client.read_spark_df(from_date="2020-01-01")
 ```
 
 ### Use Pandas DataFrame
 
 ```python
 # For smaller datasets or local analysis
-pdf = client.read_pandas_df("2025-12-01")
+pdf = client.read_pandas_df(updated_after="2025-12-01")
 
 # Now it's a pandas DataFrame
 pdf.head()
@@ -222,9 +241,12 @@ MIT License - see [LICENSE](LICENSE)
   - ✅ Renamed: `read_updated_after_as_spark_df_via_pandas()` → `read_spark_df()`
   - ✅ New: `read_pandas_df()` method for pandas DataFrame output
   - ✅ Old method kept as deprecated alias (backward compatible)
+- **Flexible Date Filtering:**
+  - ✅ `updated_after="..."` - Load files updated AFTER a date (for incremental updates)
+  - ✅ `from_date="..."` - Load ALL historical data from a production month onwards
 - **Improved UX:**
   - ✅ Sensible defaults now automatic - no need to specify `pandas_read_kwargs`
-  - ✅ Simpler API: `client.read_spark_df("2025-12-01")` just works!
+  - ✅ Simpler API: `client.read_spark_df(since="2025-12-01")` just works!
   - ✅ Automatic handling of Petrinex CSV quirks (encoding, malformed rows, types)
 
 ### v0.1.0

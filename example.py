@@ -47,9 +47,11 @@ def main():
     print("EXAMPLE 2: Load data with progress tracking")
     print("="*70)
     
-    # Load data - sensible defaults already configured!
-    # (dtype=str, encoding="latin1", on_bad_lines="skip", engine="python")
-    df = client.read_spark_df("2025-12-01")  # Change date as needed
+    # Load data - two date options:
+    # - updated_after="2025-12-01" → files updated AFTER this date (incremental)
+    # - from_date="2021-01-01" → ALL data from this production month onwards
+    
+    df = client.read_spark_df(updated_after="2025-12-01")  # Change date as needed
     
     # Cache for reuse
     df.cache()
