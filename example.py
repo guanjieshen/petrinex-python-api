@@ -47,7 +47,7 @@ def main():
     print("EXAMPLE 2: Load data with progress tracking")
     print("="*70)
     
-    df = client.read_updated_after_as_spark_df_via_pandas(
+    df = client.read_spark_df(
         "2025-12-01",  # Change as needed
         pandas_read_kwargs={
             "dtype": str,           # Avoid mixed-type issues

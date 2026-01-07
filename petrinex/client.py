@@ -151,7 +151,7 @@ class PetrinexVolumetricsClient:
     # -----------------------------
     # Public API: reading (Pandas -> Spark)
     # -----------------------------
-    def read_updated_after_as_spark_df_via_pandas(
+    def read_spark_df(
         self,
         updated_after: str,
         pandas_read_kwargs: Optional[Dict] = None,
@@ -208,7 +208,7 @@ class PetrinexVolumetricsClient:
                 encoding = pandas_read_kwargs.pop("encoding", "latin1")
                 on_bad_lines = pandas_read_kwargs.pop("on_bad_lines", "skip")
                 engine = pandas_read_kwargs.pop("engine", "python")
-                
+
                 pdf = pd.read_csv(
                     io.BytesIO(csv_data),
                     encoding=encoding,
@@ -246,7 +246,7 @@ class PetrinexVolumetricsClient:
                 if e.response.status_code == 404:
                     # File not found - skip it (may not be published yet)
                     skipped_files.append((f.production_month, "File not found (404)"))
-                    print(f"⚠️  Not found (404)")
+                    print(f"⚠️  Not found (404)") 
                     continue
                 else:
                     # Other HTTP errors - re-raise
@@ -256,6 +256,7 @@ class PetrinexVolumetricsClient:
                 skipped_files.append((f.production_month, str(e)))
                 print(f"⚠️  Error: {str(e)[:60]}")
                 continue
+
         
         # Check if we got any data at all
         if combined is None:
@@ -274,6 +275,136 @@ class PetrinexVolumetricsClient:
                 print(f"   ... and {len(skipped_files) - 5} more")
 
         return combined
+    
+    def read_pandas_df(
+        self,
+        updated_after: str,
+        pandas_read_kwargs: Optional[Dict] = None,
+        add_provenance_columns: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Downloads CSVs and returns a single concatenated pandas DataFrame.
+        
+        Similar to read_spark_df but returns pandas DataFrame instead of Spark DataFrame.
+        Useful for smaller datasets or when Spark is not needed.
+        
+        Parameters
+        ----------
+        updated_after : str
+            Date string "YYYY-MM-DD" - only files updated after this date
+        pandas_read_kwargs : dict, optional
+            Options passed to pd.read_csv (e.g. {"dtype": str, "encoding": "latin1"})
+        add_provenance_columns : bool, default True
+            Add production_month, file_updated_ts, source_url columns
+            
+        Returns
+        -------
+        pandas.DataFrame
+            Concatenated DataFrame with all loaded files
+            
+        Notes
+        -----
+        - Driver-memory bound: suitable for moderate amounts of data
+        - For large datasets, use read_spark_df instead
+        """
+        if self.file_format != "CSV":
+            raise ValueError("Pandas mode supports CSV only. Set file_format='CSV'.")
+        
+        pandas_read_kwargs = pandas_read_kwargs or {}
+        files = self.list_updated_after(updated_after)
+        if not files:
+            raise ValueError(
+                f"No months found with Updated Date > {updated_after}. "
+                f"Try an earlier date (e.g., 6 months ago)."
+            )
+        
+        dfs: List[pd.DataFrame] = []
+        files_loaded = 0
+        skipped_files = []
+        
+        for idx, f in enumerate(files, 1):
+            try:
+                print(f"Loading {idx}/{len(files)}: {f.production_month}...", end=" ")
+                
+                r = requests.get(f.url, timeout=self.request_timeout_s)
+                r.raise_for_status()
+                
+                # Extract CSV from ZIP (handle nested ZIPs)
+                csv_data = self._extract_csv_from_zip(r.content)
+                
+                # Set default pandas read options for robustness
+                encoding = pandas_read_kwargs.pop("encoding", "latin1")
+                on_bad_lines = pandas_read_kwargs.pop("on_bad_lines", "skip")
+                engine = pandas_read_kwargs.pop("engine", "python")
+                
+                pdf = pd.read_csv(
+                    io.BytesIO(csv_data),
+                    encoding=encoding,
+                    on_bad_lines=on_bad_lines,
+                    engine=engine,
+                    **pandas_read_kwargs,
+                )
+                
+                if add_provenance_columns:
+                    pdf["production_month"] = f.production_month
+                    pdf["file_updated_ts"] = f.updated_ts.strftime(self._TS_FMT)
+                    pdf["source_url"] = f.url
+                
+                dfs.append(pdf)
+                files_loaded += 1
+                print(f"✓ ({len(pdf):,} rows)")
+                
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 404:
+                    skipped_files.append((f.production_month, "File not found (404)"))
+                    print(f"⚠️  Not found (404)")
+                    continue
+                else:
+                    raise
+            except Exception as e:
+                skipped_files.append((f.production_month, str(e)))
+                print(f"⚠️  Error: {str(e)[:60]}")
+                continue
+        
+        # Check if we got any data
+        if not dfs:
+            error_msg = f"No data loaded. All {len(files)} file(s) failed or were skipped."
+            if skipped_files:
+                error_msg += f"\nSkipped files: {skipped_files}"
+            raise ValueError(error_msg)
+        
+        # Concatenate all DataFrames
+        print(f"\nConcatenating {len(dfs)} DataFrame(s)...")
+        combined = pd.concat(dfs, ignore_index=True)
+        
+        # Print summary
+        print(f"✓ Successfully loaded {files_loaded} file(s)")
+        if skipped_files:
+            print(f"⚠️  Skipped {len(skipped_files)} file(s)")
+
+        return combined
+    
+    # Deprecated alias for backward compatibility
+    def read_updated_after_as_spark_df_via_pandas(
+        self,
+        updated_after: str,
+        pandas_read_kwargs: Optional[Dict] = None,
+        add_provenance_columns: bool = True,
+        union_by_name: bool = True,
+    ) -> DataFrame:
+        """
+        DEPRECATED: Use read_spark_df() instead.
+        
+        This method is kept for backward compatibility.
+        """
+        import warnings
+        warnings.warn(
+            "read_updated_after_as_spark_df_via_pandas() is deprecated. "
+            "Use read_spark_df() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        return self.read_spark_df(updated_after, pandas_read_kwargs, add_provenance_columns, union_by_name)
 
     # -----------------------------
     # Internals
