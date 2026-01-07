@@ -5,17 +5,28 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "petrinex"
 version = "0.1.0"
-description = "Python client for Petrinex Conventional Volumetric data with Spark integration"
+description = "Memory-efficient Python client for loading Alberta Petrinex volumetric data into Spark DataFrames"
 readme = "README.md"
 requires-python = ">=3.7"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Petrinex Python API Contributors"}
 ]
-keywords = ["petrinex", "oil", "gas", "volumetrics", "spark", "databricks"]
+keywords = [
+    "petrinex",
+    "alberta",
+    "oil",
+    "gas",
+    "volumetrics",
+    "spark",
+    "databricks",
+    "unity-catalog",
+    "energy-data"
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.7",
@@ -23,6 +34,8 @@ classifiers = [
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules"
 ]
 
 dependencies = [

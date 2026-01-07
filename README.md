@@ -1,26 +1,62 @@
-# petrinex-python-api
+# Petrinex Python API
 
-A Python client for accessing Petrinex Conventional Volumetric data with Spark integration.
+A Python client for loading Alberta Petrinex volumetric data into Spark DataFrames, designed for Databricks and Unity Catalog environments.
+
+[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
 
-- 🔍 Lists Petrinex files updated after a specific date
-- 📊 Two read modes:
-  1. **Spark direct read** from HTTPS URLs
-  2. **Pandas-based read** (driver-side) that avoids Spark file permissions
-- 📝 Automatic provenance tracking (production month, update timestamp, source URL)
-- 🔄 Handles schema drift across months with `union_by_name`
-- 🔐 **Unity Catalog friendly** - no `SELECT ON ANY FILE` privilege required
+- ✅ **Unity Catalog Compatible** - No `SELECT ON ANY FILE` privilege required
+- ✅ **Memory Efficient** - Incremental loading with automatic checkpointing
+- ✅ **Robust** - Handles ZIP files, malformed data, missing files automatically
+- ✅ **Schema Drift** - Automatically aligns columns across months
+- ✅ **Provenance Tracking** - Tracks source files and update timestamps
+- ✅ **Databricks Ready** - Direct import from repos, no pip install needed
+
+## Quick Start
+
+### Option 1: Databricks Notebook (Recommended)
+
+1. **Sync this repo to Databricks Repos**
+2. **Open `databricks_example.ipynb`**
+3. **Run all cells**
+
+That's it! The notebook imports directly from the repo directory.
+
+### Option 2: Python Script
+
+```python
+from petrinex import PetrinexVolumetricsClient
+
+# Initialize
+client = PetrinexVolumetricsClient(spark=spark, jurisdiction="AB")
+
+# Load data (memory efficient, shows progress)
+df = client.read_updated_after_as_spark_df_via_pandas(
+    "2025-12-01",
+    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
+)
+
+# Display
+df.show()
+```
 
 ## Installation
 
-### From Git Repository
+### For Databricks
 
-```bash
-pip install git+https://github.com/yourusername/petrinex-python-api.git
+No installation needed! Just sync the repo and import:
+
+```python
+import sys, os
+notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+sys.path.insert(0, os.path.dirname(notebook_path))
+
+from petrinex import PetrinexVolumetricsClient
 ```
 
-### Local Development Install
+### For Local Development
 
 ```bash
 git clone https://github.com/yourusername/petrinex-python-api.git
@@ -28,327 +64,286 @@ cd petrinex-python-api
 pip install -e .
 ```
 
-### Dependencies
+## Usage
 
-The package automatically installs:
-- `beautifulsoup4` - HTML parsing
-- `lxml` - XML parsing
-- `pandas` - Data manipulation
-- `requests` - HTTP client
-- `pyspark` - Spark integration
-
-## Quick Start
+### Basic Example
 
 ```python
 from petrinex import PetrinexVolumetricsClient
 
-# Initialize client with your Spark session
 client = PetrinexVolumetricsClient(
     spark=spark,
     jurisdiction="AB",
     file_format="CSV"
 )
 
-# Recommended in UC-governed env:
+# Load all files updated after a date
 df = client.read_updated_after_as_spark_df_via_pandas(
-    "2026-01-01",
-    pandas_read_kwargs={
-        "dtype": str,      # avoid mixed-type issues
-        "encoding": "latin1"
-    }
-)
-```
-
-## Usage Guide
-
-### 1. Reading Data (Recommended for Unity Catalog)
-
-This mode downloads files on the driver and avoids Spark file permission issues.
-
-```python
-# Read data updated after a specific date
-df = client.read_updated_after_as_spark_df_via_pandas(
-    "2026-01-01",
-    pandas_read_kwargs={
-        "dtype": str,           # avoid mixed-type issues
-        "encoding": "latin1"    # handle special characters
-    }
+    "2025-12-01",
+    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
 )
 
-# Display the DataFrame
-df.show(10)
-df.printSchema()
+print(f"Loaded {df.count():,} rows")
 ```
 
-**Why this approach is recommended:**
-- ✅ Avoids Unity Catalog `ANY FILE` privilege requirements
-- ✅ Handles mixed-type columns gracefully with `dtype: str`
-- ✅ Properly decodes special characters with `encoding: "latin1"`
-- ✅ Automatically handles schema drift across months
-- ✅ No explicit disk writes required
+### What You'll See
 
-### 2. Alternative: Spark Direct Read
+```
+Loading 1/60: 2021-01... ✓ (544,221 rows)
+Loading 2/60: 2021-02... ✓ (498,832 rows)
+...
+Loading 10/60: 2021-10... ✓ (487,934 rows)
+  → Checkpointed at 10 files (5,234,891 total rows)
+...
+✓ Successfully loaded 60 file(s)
 
-```python
-# Direct Spark read (requires SELECT ON ANY FILE in UC)
-df = client.read_updated_after_as_spark_df(
-    "2026-01-01",
-    infer_schema=True,
-    header=True,
-    add_provenance_columns=True
-)
+Loaded 31,456,789 rows
 ```
 
-**Note:** This mode requires Spark to fetch HTTPS URLs directly, which may be blocked in Unity Catalog environments without appropriate permissions.
-
-### 3. Listing Files Only
+### List Files Only
 
 ```python
-# Get list of files with metadata
-files = client.list_updated_after("2026-01-01")
+files = client.list_updated_after("2025-12-01")
 for f in files:
-    print(f"{f.production_month}: Updated {f.updated_ts}")
-    print(f"  URL: {f.url}")
+    print(f"{f.production_month} | {f.updated_ts}")
+```
 
-# Get URLs only
-urls = client.urls_updated_after("2026-01-01")
+### Save to Delta Table
+
+```python
+# Add partitioning columns
+df_partitioned = df.withColumn("year", F.substring("production_month", 1, 4)) \
+                   .withColumn("month", F.substring("production_month", 6, 2))
+
+# Write to Delta
+df_partitioned.write \
+    .format("delta") \
+    .mode("overwrite") \
+    .partitionBy("year", "month") \
+    .saveAsTable("main.petrinex.volumetrics_raw")
 ```
 
 ## API Reference
 
-### PetrinexVolumetricsClient
+### `PetrinexVolumetricsClient`
 
-#### Constructor Parameters
+#### Constructor
 
 ```python
 PetrinexVolumetricsClient(
-    spark,                          # SparkSession (required)
-    jurisdiction="AB",              # Jurisdiction code
-    file_format="CSV",              # "CSV" or "XML"
-    publicdata_url=None,            # Custom PublicData page URL
-    files_base_url="https://...",   # Base URL for downloads
-    request_timeout_s=60,           # HTTP timeout in seconds
-    user_agent="Mozilla/5.0",       # User-Agent header
-    html_parser="html.parser"       # BeautifulSoup parser
+    spark,                    # SparkSession (required)
+    jurisdiction="AB",        # Jurisdiction code
+    file_format="CSV",        # File format
+    request_timeout_s=60,     # HTTP timeout
+    user_agent="Mozilla/5.0"  # User agent string
 )
 ```
 
 #### Methods
 
-##### `list_updated_after(updated_after: str) -> List[PetrinexFile]`
+##### `read_updated_after_as_spark_df_via_pandas(updated_after, pandas_read_kwargs=None)`
 
-Returns list of files with updated dates after the specified cutoff.
-
-**Parameters:**
-- `updated_after` (str): Date string in "YYYY-MM-DD" format
-
-**Returns:**
-- List of `PetrinexFile` objects with:
-  - `production_month` (str): "YYYY-MM"
-  - `updated_ts` (datetime): When the file was last updated
-  - `url` (str): Download URL
-
-##### `urls_updated_after(updated_after: str) -> List[str]`
-
-Returns list of URLs for files updated after the specified cutoff.
-
-##### `read_updated_after_as_spark_df_via_pandas(...) -> DataFrame`
-
-**Recommended method** - Downloads CSVs via requests on the driver, loads into pandas, then converts to Spark DataFrame.
+**Recommended method** - Memory efficient, Unity Catalog compatible.
 
 **Parameters:**
-- `updated_after` (str): Date string "YYYY-MM-DD"
-- `pandas_read_kwargs` (dict, optional): Parameters passed to `pd.read_csv()`
+- `updated_after` (str): Date in "YYYY-MM-DD" format
+- `pandas_read_kwargs` (dict): Options for `pd.read_csv()`
   - Recommended: `{"dtype": str, "encoding": "latin1"}`
-- `add_provenance_columns` (bool): Add tracking columns (default: True)
-- `union_by_name` (bool): Align columns across months (default: True)
 
-**Example:**
-```python
-df = client.read_updated_after_as_spark_df_via_pandas(
-    "2026-01-01",
-    pandas_read_kwargs={
-        "dtype": str,               # Force all columns to string
-        "encoding": "latin1",       # Handle special characters
-        "na_values": ["", "NA"],    # Custom NA values
-        "skipinitialspace": True    # Trim whitespace
-    }
-)
-```
+**Returns:** Spark DataFrame with provenance columns
 
-##### `read_updated_after_as_spark_df(...) -> DataFrame`
+**Features:**
+- Incremental union (memory efficient)
+- Automatic checkpointing every 10 files
+- Progress tracking
+- Skips missing files (404)
+- Handles nested ZIPs automatically
 
-Reads selected months by letting Spark fetch HTTPS URLs directly.
+##### `list_updated_after(updated_after)`
 
-**Parameters:**
-- `updated_after` (str): Date string "YYYY-MM-DD"
-- `infer_schema` (bool): Infer column types (default: True)
-- `header` (bool): First row is header (default: True)
-- `add_provenance_columns` (bool): Add tracking columns (default: True)
+Lists files with update dates after the cutoff.
+
+**Returns:** List of `PetrinexFile` objects with:
+- `production_month`: "YYYY-MM" string
+- `updated_ts`: datetime
+- `url`: download URL
 
 ## Provenance Columns
 
-When `add_provenance_columns=True` (default), these columns are added:
+All DataFrames include:
 
-| Column | Description |
-|--------|-------------|
-| `production_month` | The YYYY-MM production period |
-| `file_updated_ts` | Timestamp when file was last updated |
-| `source_url` | The download URL for the file |
+| Column | Type | Description |
+|--------|------|-------------|
+| `production_month` | string | Production period (YYYY-MM) |
+| `file_updated_ts` | string | When file was last updated |
+| `source_url` | string | Download URL |
 
-## Best Practices
+## How It Works
 
-1. ✅ **Use pandas mode in Unity Catalog environments** to avoid file permission issues
-2. ✅ **Set `dtype: str`** to prevent mixed-type column errors during ingestion
-3. ✅ **Use `encoding: "latin1"`** to properly handle special characters in Alberta data
-4. ✅ **Enable `union_by_name`** (default) to handle schema changes across months
-5. ✅ **Use realistic dates** - Files may not be published yet for recent/future months
-6. ✅ **Memory efficient by design** - Uses incremental union (no need to worry about OOM for typical loads)
-7. ✅ **Cache or persist** the final DataFrame if you'll use it multiple times
+1. **Queries Petrinex API** - Scrapes the PublicData page for file metadata
+2. **Filters by date** - Returns only files updated after your cutoff
+3. **Downloads files** - Fetches via HTTP (driver-side)
+4. **Extracts ZIPs** - Handles nested ZIP files automatically
+5. **Loads to pandas** - Reads CSV with robust error handling
+6. **Converts to Spark** - Creates Spark DataFrame
+7. **Unions incrementally** - Memory-efficient union with checkpointing
+8. **Adds provenance** - Tracks source files and timestamps
 
-## Databricks Workflow
+## File Format Details
 
-### Using the Databricks Notebook (Recommended)
+- **Compression**: Double-zipped (ZIP within ZIP) - automatically handled
+- **Format**: CSV with header row
+- **Encoding**: Latin-1 (for special characters)
+- **Size**: ~7-8 MB compressed → ~120 MB uncompressed per month
+- **Rows**: ~500K-600K rows per month
+- **Schema**: May vary slightly across months (handled automatically)
 
-The repository includes a complete Databricks notebook (`databricks_example.ipynb`) that:
-- ✅ **Imports directly from the repo directory** (no pip install needed!)
-- ✅ Works with Databricks Repos (Git sync)
-- ✅ Includes complete workflow from data loading to Delta table
-- ✅ Production-ready with error handling and best practices
+## Memory Considerations
 
-**To use:**
-1. Sync this repo to Databricks Repos
-2. Open `databricks_example.ipynb` in your workspace
-3. Update catalog/schema names (cell 7)
-4. Run all cells
+**Incremental union approach:**
+- Unions DataFrames as they load (not all at once)
+- Checkpoints every 10 files to avoid long lineage
+- Typical usage: 16-32 GB driver memory for 60 files
 
-The notebook automatically adds the repo directory to Python path:
+**If you hit OOM:**
 ```python
-# Automatically done in the notebook
-notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-repo_root = os.path.dirname(notebook_path)
-sys.path.insert(0, repo_root)
-
-# Then import works directly
-from petrinex import PetrinexVolumetricsClient
-```
-
-### Python Script Example
-
-```python
-from pyspark.sql import SparkSession
-from petrinex import PetrinexVolumetricsClient
-
-# Create Spark session
-spark = SparkSession.builder.appName("PetrinexData").getOrCreate()
-
-# Initialize client
-client = PetrinexVolumetricsClient(
-    spark=spark,
-    jurisdiction="AB",
-    file_format="CSV"
-)
-
-# Read data updated in the last month
-df = client.read_updated_after_as_spark_df_via_pandas(
-    "2026-01-01",
-    pandas_read_kwargs={
-        "dtype": str,
-        "encoding": "latin1"
-    }
-)
-
-# Cache for reuse
-df.cache()
-
-# Show schema and sample data
-df.printSchema()
-df.show(10, truncate=False)
-
-# Write to Delta table
-df.write.format("delta").mode("overwrite").saveAsTable("petrinex.volumetrics")
-
-print(f"✅ Loaded {df.count():,} records")
-```
-
-## File Format Notes
-
-- 📦 Petrinex files are **double-zipped** (ZIP within ZIP) - **automatically handled**
-- 📝 CSV files use **uppercase extension** (.CSV)
-- 💾 Files can be **large** (100+ MB uncompressed)
-- 🔄 Schema may vary slightly across months (handled by `union_by_name`)
-- 🛡️ Malformed CSV lines are **automatically skipped** (no manual intervention needed)
-
-## Troubleshooting
-
-### Error: "SELECT ON ANY FILE privilege required"
-
-**Solution:** Use the pandas-based read method instead:
-```python
-df = client.read_updated_after_as_spark_df_via_pandas(...)
-```
-
-### Error: "Mixed type column detected"
-
-**Solution:** Already handled by default with `dtype: str` setting.
-
-### Error: "UnicodeDecodeError"
-
-**Solution:** Already handled by default with `encoding: "latin1"` setting.
-
-### Error: "Buffer overflow" or "Error tokenizing data"
-
-**Solution:** Already handled automatically! The client:
-- ✅ Extracts CSV from nested ZIP files
-- ✅ Skips malformed lines with `on_bad_lines='skip'`
-- ✅ Uses Python parser for better error handling
-
-### Error: "404 Not Found" for specific months
-
-**Solution:** Already handled automatically! The client:
-- ✅ Skips files that return 404 (not yet published or unavailable)
-- ✅ Continues loading other available files
-- ✅ Shows warnings for skipped files
-- ✅ Only fails if NO files are successfully loaded
-
-**Example output:**
-```
-⚠️  Skipping 2026-01: File not found (404)
-⚠️  Skipping 2026-02: File not found (404)
-✓ Successfully loaded 58 file(s)
-⚠️  Skipped 2 file(s)
-```
-
-### Memory Issues with Large Date Ranges
-
-**Solution:** Already optimized! The client uses incremental union:
-- ✅ Unions DataFrames as they're loaded (doesn't keep all in memory)
-- ✅ Automatic checkpointing every 10 files to avoid long lineage
-- ✅ Progress tracking shows memory-efficient loading
-
-**Typical memory usage:**
-- 10 files: ~4-8 GB driver memory
-- 30 files: ~8-16 GB driver memory  
-- 60+ files: ~16-32 GB driver memory
-
-**If you still hit OOM, increase driver memory:**
-```python
-# Databricks cluster config
+# Increase driver memory in cluster config
 spark.conf.set("spark.driver.memory", "32g")
 spark.conf.set("spark.driver.maxResultSize", "8g")
 ```
 
-## Contributing
+## Error Handling
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+All errors are handled gracefully:
+
+| Error | Behavior |
+|-------|----------|
+| 404 Not Found | Skips file, continues loading others |
+| Malformed CSV | Skips bad lines with `on_bad_lines='skip'` |
+| ZIP issues | Auto-extracts nested ZIPs |
+| Encoding errors | Uses latin-1 encoding |
+| No data found | Clear error message with suggestions |
+
+## Best Practices
+
+1. ✅ Use realistic date ranges (files may not be published for recent months)
+2. ✅ Always use `dtype: str` to avoid mixed-type column errors
+3. ✅ Use `encoding: "latin1"` for Alberta data
+4. ✅ Cache the final DataFrame if using it multiple times
+5. ✅ Monitor the progress output to track loading
+6. ✅ For very large loads (100+ files), increase driver memory
+
+## Examples
+
+### Load Last 6 Months
+
+```python
+from datetime import datetime, timedelta
+
+six_months_ago = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+df = client.read_updated_after_as_spark_df_via_pandas(
+    six_months_ago,
+    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
+)
+```
+
+### Filter After Loading
+
+```python
+# Load data
+df = client.read_updated_after_as_spark_df_via_pandas("2025-01-01", ...)
+
+# Filter to specific operator
+df_filtered = df.filter(F.col("OperatorBAID") == "12345")
+
+# Aggregate
+summary = df.groupBy("production_month", "ProductType") \
+    .agg(F.sum("Volume").alias("total_volume"))
+```
+
+### Incremental Updates
+
+```python
+# Get last load date from existing table
+last_update = spark.sql("""
+    SELECT MAX(file_updated_ts) as last_ts
+    FROM main.petrinex.volumetrics_raw
+""").collect()[0]["last_ts"]
+
+# Load only new/updated files
+df_new = client.read_updated_after_as_spark_df_via_pandas(
+    last_update.split()[0],  # Convert datetime to date
+    pandas_read_kwargs={"dtype": str, "encoding": "latin1"}
+)
+
+# Append to existing table
+df_new.write.format("delta").mode("append").saveAsTable("...")
+```
+
+## Troubleshooting
+
+### "No data loaded" error
+- Use an earlier date (e.g., 6 months ago)
+- Files may not be published yet for recent months
+
+### Memory errors
+- Increase driver memory configuration
+- Load smaller date ranges
+
+### Encoding errors
+- Already handled with `encoding="latin1"` default
+- If issues persist, try `encoding="utf-8"`
+
+## Repository Structure
+
+```
+petrinex-python-api/
+├── petrinex/                    # Main package
+│   ├── __init__.py             # Package exports
+│   └── client.py               # PetrinexVolumetricsClient
+├── databricks_example.ipynb    # Example notebook
+├── example.py                  # Python script example
+├── setup.py                    # Package setup
+├── pyproject.toml              # Modern Python config
+└── README.md                   # This file
+```
+
+## Requirements
+
+- Python 3.7+
+- PySpark 3.0+
+- pandas 1.2+
+- requests 2.25+
+- beautifulsoup4 4.9+
+- lxml 4.6+
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License - see [LICENSE](LICENSE) file.
+
+## Contributing
+
+Contributions welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
 ## Support
 
-For issues and questions:
-- 🐛 [Report bugs](https://github.com/yourusername/petrinex-python-api/issues)
-- 💡 [Request features](https://github.com/yourusername/petrinex-python-api/issues)
-- 📖 [View documentation](https://github.com/yourusername/petrinex-python-api)
+- 📖 [Full documentation](README.md)
+- 💻 [Example notebook](databricks_example.ipynb)
+- 🐛 [Report issues](https://github.com/yourusername/petrinex-python-api/issues)
+
+## Changelog
+
+### v0.1.0 (2026-01)
+- Initial release
+- Unity Catalog compatible
+- Memory-efficient incremental loading
+- Automatic error handling
+- Databricks notebook example
+
+---
+
+**Made with ❤️ for the Alberta energy data community**
