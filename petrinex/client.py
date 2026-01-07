@@ -1,0 +1,255 @@
+# %pip install beautifulsoup4 lxml pandas   # run once if needed
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+import io
+import re
+from typing import Dict, List, Optional
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+
+from pyspark.sql import DataFrame
+from pyspark.sql import functions as F
+
+
+@dataclass(frozen=True)
+class PetrinexFile:
+    production_month: str  # "YYYY-MM"
+    updated_ts: datetime  # timestamp shown in UI (server-rendered HTML)
+    url: str  # download URL
+
+
+class PetrinexVolumetricsClient:
+    """
+    Finds Petrinex Conventional Volumetric months "updated after" a cutoff date
+    (matching the UI behavior) and reads them into Spark.
+
+    Two read modes:
+      1) Spark direct read from HTTPS URLs (may be blocked by UC / ANY FILE privilege)
+      2) Pandas driver-side download -> Spark DataFrame (avoids Spark file permissions)
+
+    No explicit user-managed disk writes.
+    """
+
+    _DATE_FMT = "%Y-%m-%d"
+    _TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+    _MONTH_RE = re.compile(r"\b(20\d{2}-\d{2})\b")  # YYYY-MM
+    _TS_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")  # YYYY-MM-DD HH:MM:SS
+
+    def __init__(
+        self,
+        spark,
+        jurisdiction: str = "AB",
+        file_format: str = "CSV",  # "CSV" or "XML" (Spark direct mode only; pandas mode supports CSV)
+        publicdata_url: Optional[str] = None,
+        files_base_url: str = "https://www.petrinex.gov.ab.ca/publicdata/API/Files",
+        request_timeout_s: int = 60,
+        user_agent: str = "Mozilla/5.0",
+        html_parser: str = "html.parser",  # or "lxml"
+    ):
+        self.spark = spark
+        self.jurisdiction = jurisdiction.upper()
+        self.file_format = file_format.upper()
+        self.publicdata_url = (
+            publicdata_url
+            or f"https://www.petrinex.gov.ab.ca/PublicData?Jurisdiction={self.jurisdiction}"
+        )
+        self.files_base_url = files_base_url.rstrip("/")
+        self.request_timeout_s = request_timeout_s
+        self.user_agent = user_agent
+        self.html_parser = html_parser
+
+        if self.file_format not in {"CSV", "XML"}:
+            raise ValueError("file_format must be 'CSV' or 'XML'")
+
+    # -----------------------------
+    # Public API: listing
+    # -----------------------------
+    def list_updated_after(self, updated_after: str) -> List[PetrinexFile]:
+        """
+        Returns months whose UI 'Updated Date' timestamp is strictly greater than updated_after.
+
+        updated_after: "YYYY-MM-DD"
+        """
+        cutoff = datetime.strptime(updated_after, self._DATE_FMT)
+        html = self._fetch_publicdata_html()
+        month_updates = self._extract_month_updates(html)
+
+        files: List[PetrinexFile] = []
+        for ym, upd in month_updates.items():
+            if upd > cutoff:
+                files.append(PetrinexFile(ym, upd, self._build_download_url(ym)))
+
+        files.sort(key=lambda f: f.production_month)
+        return files
+
+    def urls_updated_after(self, updated_after: str) -> List[str]:
+        return [f.url for f in self.list_updated_after(updated_after)]
+
+    # -----------------------------
+    # Public API: reading (Spark direct)
+    # -----------------------------
+    def read_updated_after_as_spark_df(
+        self,
+        updated_after: str,
+        infer_schema: bool = True,
+        header: bool = True,
+        add_provenance_columns: bool = True,
+    ) -> DataFrame:
+        """
+        Reads selected months into a single Spark DataFrame by letting Spark fetch HTTPS URLs.
+        This can fail in Unity Catalog environments without SELECT ON ANY FILE.
+
+        Adds provenance columns by default:
+          - source_url (Spark input_file_name)
+          - production_month
+          - file_updated_ts (string)
+        """
+        files = self.list_updated_after(updated_after)
+        if not files:
+            raise ValueError(f"No months found with Updated Date > {updated_after}")
+
+        urls = [f.url for f in files]
+
+        reader = self.spark.read
+        if header:
+            reader = reader.option("header", "true")
+        if infer_schema:
+            reader = reader.option("inferSchema", "true")
+
+        if self.file_format == "CSV":
+            df = reader.csv(urls)
+        else:
+            # XML parsing requires spark-xml; left here as placeholder if you use XML
+            # df = reader.format("xml").load(urls)
+            raise NotImplementedError(
+                "XML Spark direct read not implemented in this class."
+            )
+
+        if not add_provenance_columns:
+            return df
+
+        mapping_rows = [
+            (f.url, f.production_month, f.updated_ts.strftime(self._TS_FMT))
+            for f in files
+        ]
+        mapping_df = self.spark.createDataFrame(
+            mapping_rows,
+            "source_url STRING, production_month STRING, file_updated_ts STRING",
+        )
+
+        return df.withColumn("source_url", F.input_file_name()).join(
+            mapping_df, on="source_url", how="left"
+        )
+
+    # -----------------------------
+    # Public API: reading (Pandas -> Spark)
+    # -----------------------------
+    def read_updated_after_as_spark_df_via_pandas(
+        self,
+        updated_after: str,
+        pandas_read_kwargs: Optional[Dict] = None,
+        add_provenance_columns: bool = True,
+        union_by_name: bool = True,
+    ) -> DataFrame:
+        """
+        Downloads CSVs via requests on the driver, loads each into pandas, concatenates,
+        then converts to a Spark DataFrame.
+
+        This avoids Spark file permissions (e.g., SELECT ON ANY FILE).
+
+        Parameters
+        ----------
+        pandas_read_kwargs:
+          passed to pd.read_csv (e.g. {"dtype": str} to avoid mixed-type issues)
+        union_by_name:
+          If True, aligns columns across months (handles schema drift). Missing cols become null.
+
+        Notes
+        -----
+        - No explicit disk writes.
+        - Driver-memory bound: fine for typical monthly files; avoid huge ranges.
+        """
+        if self.file_format != "CSV":
+            raise ValueError("Pandas mode supports CSV only. Set file_format='CSV'.")
+
+        pandas_read_kwargs = pandas_read_kwargs or {}
+        files = self.list_updated_after(updated_after)
+        if not files:
+            raise ValueError(f"No months found with Updated Date > {updated_after}")
+
+        spark_dfs: List[DataFrame] = []
+
+        for f in files:
+            r = requests.get(f.url, timeout=self.request_timeout_s)
+            r.raise_for_status()
+
+            pdf = pd.read_csv(
+                io.BytesIO(r.content),
+                encoding=pandas_read_kwargs.pop("encoding", "latin1"),
+                **pandas_read_kwargs,
+            )
+
+            if add_provenance_columns:
+                pdf["production_month"] = f.production_month
+                pdf["file_updated_ts"] = f.updated_ts.strftime(self._TS_FMT)
+                pdf["source_url"] = f.url
+
+            sdf = self.spark.createDataFrame(pdf)
+            spark_dfs.append(sdf)
+
+        # Union all Spark DFs
+        combined = spark_dfs[0]
+        for d in spark_dfs[1:]:
+            if union_by_name:
+                combined = combined.unionByName(d, allowMissingColumns=True)
+            else:
+                combined = combined.union(d)
+
+        return combined
+
+    # -----------------------------
+    # Internals
+    # -----------------------------
+    def _build_download_url(self, ym: str) -> str:
+        # Example: https://www.petrinex.gov.ab.ca/publicdata/API/Files/AB/Vol/2025-09/CSV
+        return f"{self.files_base_url}/{self.jurisdiction}/Vol/{ym}/{self.file_format}"
+
+    def _fetch_publicdata_html(self) -> str:
+        r = requests.get(
+            self.publicdata_url,
+            headers={"User-Agent": self.user_agent},
+            timeout=self.request_timeout_s,
+        )
+        r.raise_for_status()
+        return r.text
+
+    def _extract_month_updates(self, html: str) -> Dict[str, datetime]:
+        """
+        Extract { 'YYYY-MM': latest_updated_datetime } by scanning table rows for:
+          - a YYYY-MM token
+          - a timestamp token
+        """
+        soup = BeautifulSoup(html, self.html_parser)
+        month_to_updated: Dict[str, datetime] = {}
+
+        for tr in soup.find_all("tr"):
+            text = tr.get_text(" ", strip=True)
+
+            m = self._MONTH_RE.search(text)
+            t = self._TS_RE.search(text)
+            if not m or not t:
+                continue
+
+            ym = m.group(1)
+            updated_dt = datetime.strptime(t.group(0), self._TS_FMT)
+
+            if ym not in month_to_updated or updated_dt > month_to_updated[ym]:
+                month_to_updated[ym] = updated_dt
+
+        return month_to_updated
