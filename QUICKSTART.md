@@ -23,11 +23,13 @@ df = client.read_updated_after_as_spark_df_via_pandas(
 
 ## Databricks Workflow
 
-1. **Upload Notebook**: Import `databricks_example.ipynb` to your Databricks workspace
-2. **Install Package**: Run the installation cell
-3. **Configure**: Update catalog/schema names in cell 8
-4. **Run**: Execute all cells
+1. **Sync Repo**: Connect this repo to Databricks Repos (Git sync)
+2. **Open Notebook**: Open `databricks_example.ipynb` in your workspace
+3. **Configure**: Update catalog/schema names in cell 7
+4. **Run**: Execute all cells (imports directly from repo - no pip install!)
 5. **Schedule**: Create a job to run regularly
+
+**Note**: The notebook imports directly from the repo directory, so no package installation is needed!
 
 ## Key Parameters
 

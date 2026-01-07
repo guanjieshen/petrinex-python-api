@@ -205,7 +205,34 @@ When `add_provenance_columns=True` (default), these columns are added:
 5. ✅ **Monitor driver memory** when processing large date ranges in pandas mode
 6. ✅ **Cache or persist** the DataFrame if you'll use it multiple times
 
-## Example: Complete Databricks Workflow
+## Databricks Workflow
+
+### Using the Databricks Notebook (Recommended)
+
+The repository includes a complete Databricks notebook (`databricks_example.ipynb`) that:
+- ✅ **Imports directly from the repo directory** (no pip install needed!)
+- ✅ Works with Databricks Repos (Git sync)
+- ✅ Includes complete workflow from data loading to Delta table
+- ✅ Production-ready with error handling and best practices
+
+**To use:**
+1. Sync this repo to Databricks Repos
+2. Open `databricks_example.ipynb` in your workspace
+3. Update catalog/schema names (cell 7)
+4. Run all cells
+
+The notebook automatically adds the repo directory to Python path:
+```python
+# Automatically done in the notebook
+notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+repo_root = os.path.dirname(notebook_path)
+sys.path.insert(0, repo_root)
+
+# Then import works directly
+from petrinex import PetrinexVolumetricsClient
+```
+
+### Python Script Example
 
 ```python
 from pyspark.sql import SparkSession
