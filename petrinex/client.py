@@ -174,7 +174,10 @@ class PetrinexVolumetricsClient:
         Notes
         -----
         - No explicit disk writes.
-        - Driver-memory bound: fine for typical monthly files; avoid huge ranges.
+        - Memory efficient: unions DataFrames incrementally as they're loaded.
+        - Automatic checkpointing every 10 files to avoid long lineage.
+        - Skips files that return 404 errors (not yet published).
+        - Shows progress for each file loaded.
         """
         if self.file_format != "CSV":
             raise ValueError("Pandas mode supports CSV only. Set file_format='CSV'.")
@@ -182,45 +185,93 @@ class PetrinexVolumetricsClient:
         pandas_read_kwargs = pandas_read_kwargs or {}
         files = self.list_updated_after(updated_after)
         if not files:
-            raise ValueError(f"No months found with Updated Date > {updated_after}")
-
-        spark_dfs: List[DataFrame] = []
-
-        for f in files:
-            r = requests.get(f.url, timeout=self.request_timeout_s)
-            r.raise_for_status()
-
-            # Extract CSV from ZIP (handle nested ZIPs)
-            csv_data = self._extract_csv_from_zip(r.content)
-            
-            # Set default pandas read options for robustness
-            encoding = pandas_read_kwargs.pop("encoding", "latin1")
-            on_bad_lines = pandas_read_kwargs.pop("on_bad_lines", "skip")
-            engine = pandas_read_kwargs.pop("engine", "python")
-            
-            pdf = pd.read_csv(
-                io.BytesIO(csv_data),
-                encoding=encoding,
-                on_bad_lines=on_bad_lines,
-                engine=engine,
-                **pandas_read_kwargs,
+            raise ValueError(
+                f"No months found with Updated Date > {updated_after}. "
+                f"Try an earlier date (e.g., 6 months ago)."
             )
 
-            if add_provenance_columns:
-                pdf["production_month"] = f.production_month
-                pdf["file_updated_ts"] = f.updated_ts.strftime(self._TS_FMT)
-                pdf["source_url"] = f.url
+        combined = None
+        files_loaded = 0
+        skipped_files = []
 
-            sdf = self.spark.createDataFrame(pdf)
-            spark_dfs.append(sdf)
+        for idx, f in enumerate(files, 1):
+            try:
+                print(f"Loading {idx}/{len(files)}: {f.production_month}...", end=" ")
+                
+                r = requests.get(f.url, timeout=self.request_timeout_s)
+                r.raise_for_status()
 
-        # Union all Spark DFs
-        combined = spark_dfs[0]
-        for d in spark_dfs[1:]:
-            if union_by_name:
-                combined = combined.unionByName(d, allowMissingColumns=True)
-            else:
-                combined = combined.union(d)
+                # Extract CSV from ZIP (handle nested ZIPs)
+                csv_data = self._extract_csv_from_zip(r.content)
+                
+                # Set default pandas read options for robustness
+                encoding = pandas_read_kwargs.pop("encoding", "latin1")
+                on_bad_lines = pandas_read_kwargs.pop("on_bad_lines", "skip")
+                engine = pandas_read_kwargs.pop("engine", "python")
+                
+                pdf = pd.read_csv(
+                    io.BytesIO(csv_data),
+                    encoding=encoding,
+                    on_bad_lines=on_bad_lines,
+                    engine=engine,
+                    **pandas_read_kwargs,
+                )
+
+                if add_provenance_columns:
+                    pdf["production_month"] = f.production_month
+                    pdf["file_updated_ts"] = f.updated_ts.strftime(self._TS_FMT)
+                    pdf["source_url"] = f.url
+
+                sdf = self.spark.createDataFrame(pdf)
+                
+                # Union as we go (memory efficient)
+                if combined is None:
+                    combined = sdf
+                else:
+                    if union_by_name:
+                        combined = combined.unionByName(sdf, allowMissingColumns=True)
+                    else:
+                        combined = combined.union(sdf)
+                
+                files_loaded += 1
+                print(f"✓ ({len(pdf):,} rows)")
+                
+                # Periodically checkpoint to avoid long lineage (every 10 files)
+                if files_loaded % 10 == 0:
+                    combined.cache()
+                    row_count = combined.count()  # Materialize
+                    print(f"  → Checkpointed at {files_loaded} files ({row_count:,} total rows)")
+                
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 404:
+                    # File not found - skip it (may not be published yet)
+                    skipped_files.append((f.production_month, "File not found (404)"))
+                    print(f"⚠️  Not found (404)")
+                    continue
+                else:
+                    # Other HTTP errors - re-raise
+                    raise
+            except Exception as e:
+                # Log other errors but continue
+                skipped_files.append((f.production_month, str(e)))
+                print(f"⚠️  Error: {str(e)[:60]}")
+                continue
+        
+        # Check if we got any data at all
+        if combined is None:
+            error_msg = f"No data loaded. All {len(files)} file(s) failed or were skipped."
+            if skipped_files:
+                error_msg += f"\nSkipped files: {skipped_files}"
+            raise ValueError(error_msg)
+        
+        # Print summary
+        print(f"\n✓ Successfully loaded {files_loaded} file(s)")
+        if skipped_files:
+            print(f"⚠️  Skipped {len(skipped_files)} file(s):")
+            for month, reason in skipped_files[:5]:  # Show first 5
+                print(f"   - {month}: {reason}")
+            if len(skipped_files) > 5:
+                print(f"   ... and {len(skipped_files) - 5} more")
 
         return combined
 

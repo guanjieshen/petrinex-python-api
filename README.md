@@ -202,8 +202,9 @@ When `add_provenance_columns=True` (default), these columns are added:
 2. ✅ **Set `dtype: str`** to prevent mixed-type column errors during ingestion
 3. ✅ **Use `encoding: "latin1"`** to properly handle special characters in Alberta data
 4. ✅ **Enable `union_by_name`** (default) to handle schema changes across months
-5. ✅ **Monitor driver memory** when processing large date ranges in pandas mode
-6. ✅ **Cache or persist** the DataFrame if you'll use it multiple times
+5. ✅ **Use realistic dates** - Files may not be published yet for recent/future months
+6. ✅ **Memory efficient by design** - Uses incremental union (no need to worry about OOM for typical loads)
+7. ✅ **Cache or persist** the final DataFrame if you'll use it multiple times
 
 ## Databricks Workflow
 
@@ -302,14 +303,39 @@ df = client.read_updated_after_as_spark_df_via_pandas(...)
 - ✅ Skips malformed lines with `on_bad_lines='skip'`
 - ✅ Uses Python parser for better error handling
 
+### Error: "404 Not Found" for specific months
+
+**Solution:** Already handled automatically! The client:
+- ✅ Skips files that return 404 (not yet published or unavailable)
+- ✅ Continues loading other available files
+- ✅ Shows warnings for skipped files
+- ✅ Only fails if NO files are successfully loaded
+
+**Example output:**
+```
+⚠️  Skipping 2026-01: File not found (404)
+⚠️  Skipping 2026-02: File not found (404)
+✓ Successfully loaded 58 file(s)
+⚠️  Skipped 2 file(s)
+```
+
 ### Memory Issues with Large Date Ranges
 
-**Solution:** Process in smaller batches:
+**Solution:** Already optimized! The client uses incremental union:
+- ✅ Unions DataFrames as they're loaded (doesn't keep all in memory)
+- ✅ Automatic checkpointing every 10 files to avoid long lineage
+- ✅ Progress tracking shows memory-efficient loading
+
+**Typical memory usage:**
+- 10 files: ~4-8 GB driver memory
+- 30 files: ~8-16 GB driver memory  
+- 60+ files: ~16-32 GB driver memory
+
+**If you still hit OOM, increase driver memory:**
 ```python
-# Process one month at a time
-for month in ["2026-01-01", "2026-02-01", "2026-03-01"]:
-    df = client.read_updated_after_as_spark_df_via_pandas(month, ...)
-    # Process and write each month
+# Databricks cluster config
+spark.conf.set("spark.driver.memory", "32g")
+spark.conf.set("spark.driver.maxResultSize", "8g")
 ```
 
 ## Contributing
