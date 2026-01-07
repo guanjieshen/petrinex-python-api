@@ -356,7 +356,7 @@ class PetrinexVolumetricsClient:
                     skipped_files.append((f.production_month, "File not found (404)"))
                     print(f"⚠️  Not found (404)")
                     continue
-            else:
+                else:
                     raise
             except Exception as e:
                 skipped_files.append((f.production_month, str(e)))
