@@ -5,6 +5,31 @@ All notable changes to the Petrinex Python API will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-01-20
+
+### Added
+- **Test Coverage for download_files()**: Added 8 new unit tests for file download functionality
+  - Tests for basic download, month organization, date range filtering
+  - Tests for 404 error handling, directory creation, parameter validation
+  - Total test suite now includes 42 unit tests + 3 integration tests
+
+### Changed
+- **Simplified download_files() API**: Removed optional parameters for clearer, more consistent behavior
+  - Always extracts CSV from ZIP (removed `extract_zip` parameter)
+  - Always organizes files in month subdirectories (removed `organize_by_month` parameter)
+  - Simpler API with only essential date filtering parameters
+- **Streamlined Documentation**: README reduced by 36% (219 → 140 lines)
+  - Removed duplicate sections
+  - Consolidated examples
+  - Clearer organization and hierarchy
+  - More focused on key features
+- **Repository Cleanup**: Removed redundant files
+  - Removed `tests/README.md` (testing info now in main README)
+  - Cleaner, more maintainable repository structure
+
+### Fixed
+- Fixed pre-existing indentation issues in `read_spark_df()` method
+
 ## [1.0.1] - 2026-01-19
 
 ### Added
