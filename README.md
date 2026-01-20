@@ -1,9 +1,16 @@
 # Petrinex Python API
 
-Load Alberta Petrinex volumetric data into Spark/pandas DataFrames - Unity Catalog compatible, memory efficient.
+Load Alberta Petrinex data (Volumetrics, NGL) into Spark/pandas DataFrames.
 
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+## Features
+
+- ✅ **Unity Catalog Compatible** - No `ANY FILE` privilege needed
+- ✅ **Memory Efficient** - Handles 60+ files without OOM
+- ✅ **Multiple Data Types** - Volumetrics and NGL support
+- ✅ **Zero Config** - Handles ZIP extraction, encoding, malformed rows automatically
 
 ## Quick Start
 
@@ -12,42 +19,41 @@ pip install petrinex
 ```
 
 ```python
-from petrinex import PetrinexVolumetricsClient
+from petrinex import PetrinexClient
 
-client = PetrinexVolumetricsClient(spark=spark, jurisdiction="AB")
-
-# Incremental updates
+# Volumetrics
+client = PetrinexClient(spark=spark, data_type="Vol")
 df = client.read_spark_df(updated_after="2025-12-01")
 
-# Historical backfill
-df = client.read_spark_df(from_date="2021-01-01")
-
-df.show()
+# NGL and Marketable Gas
+ngl_client = PetrinexClient(spark=spark, data_type="NGL")
+ngl_df = ngl_client.read_spark_df(updated_after="2025-12-01")
 ```
 
-## Why Use This?
+## Supported Data Types
 
-- ✅ **Memory Efficient** - Handles 60+ files without OOM
-- ✅ **Zero Config** - Handles ZIP extraction, encoding, malformed rows automatically
-- ✅ **Databricks Ready** - Works in notebooks and repos
+| Data Type | Description |
+|-----------|-------------|
+| `Vol` | Conventional Volumetrics (oil & gas production) |
+| `NGL` | NGL and Marketable Gas Volumes |
 
-## API Reference
+## API
 
 ### Load Data
 
 ```python
-# Returns Spark DataFrame
+# Spark DataFrame (recommended)
 df = client.read_spark_df(updated_after="2025-12-01")
 
-# Returns pandas DataFrame
+# pandas DataFrame (for smaller datasets)
 pdf = client.read_pandas_df(updated_after="2025-12-01")
 ```
 
 **Date Options:**
-- `updated_after="2025-12-01"` - Files modified after this date (incremental)
-- `from_date="2021-01-01"` - All data from this production month onwards (backfill)
+- `updated_after="2025-12-01"` - Files modified after this date
+- `from_date="2021-01-01"` - All data from this production month onwards
 
-### List Available Files
+### List Files
 
 ```python
 files = client.list_updated_after("2025-12-01")
@@ -55,14 +61,16 @@ for f in files:
     print(f"{f.production_month} | {f.updated_ts}")
 ```
 
-### Added Columns
+### Provenance Columns
 
 Every DataFrame includes:
 - `production_month` - Production period (YYYY-MM)
-- `file_updated_ts` - When Petrinex last updated the file
+- `file_updated_ts` - When Petrinex updated the file
 - `source_url` - Download URL
 
 ## Examples
+
+See [example.py](example.py) and [databricks_example.ipynb](databricks_example.ipynb) for complete examples.
 
 ### Incremental Updates
 
@@ -76,24 +84,15 @@ last_update = spark.sql(
 df = client.read_spark_df(updated_after=last_update.split()[0])
 ```
 
-### Historical Load
+### Historical Backfill
 
 ```python
-# Load everything from 2020 onwards
+# Load all data from 2020 onwards
 df = client.read_spark_df(from_date="2020-01-01")
 
 # Save to Delta
 df.write.format("delta").mode("overwrite") \
   .saveAsTable("main.petrinex.volumetrics")
-```
-
-### Last 6 Months
-
-```python
-from datetime import datetime, timedelta
-
-six_months_ago = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
-df = client.read_spark_df(updated_after=six_months_ago)
 ```
 
 ## Installation
@@ -108,33 +107,57 @@ pip install git+https://github.com/guanjieshen/petrinex-python-api.git
 # For development
 git clone https://github.com/guanjieshen/petrinex-python-api.git
 cd petrinex-python-api
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ## Databricks
 
-See [databricks_example.ipynb](databricks_example.ipynb) for a complete working example.
+### Quick Setup
 
 1. Sync this repo to Databricks Repos
-2. Open the notebook
+2. Open [databricks_example.ipynb](databricks_example.ipynb)
 3. Run it
 
-## Troubleshooting
+### Usage in Databricks Notebooks
 
-| Issue | Fix |
-|-------|-----|
-| "No data loaded" | Use an earlier date (files may not be published yet) |
-| Memory errors | Increase driver memory or use `from_date` for backfills |
-| `AttributeError` | Restart kernel/clear cache: `%restart_python` |
+```python
+# Install directly from GitHub
+%pip install git+https://github.com/guanjieshen/petrinex-python-api.git
 
-## What's Happening Under the Hood
+from petrinex import PetrinexClient
 
-1. Scrapes Petrinex PublicData page for file metadata
-2. Filters files by your date criteria
-3. Downloads and extracts nested ZIP files
-4. Parses CSVs with robust error handling (handles bad rows, encoding)
-5. Unions incrementally with auto-checkpointing (memory efficient)
-6. Returns a single Spark DataFrame
+# Create client
+client = PetrinexClient(spark=spark, data_type="Vol")
+
+# Option 1: Load directly as Spark DataFrame (recommended)
+df = client.read_spark_df(updated_after="2025-12-01")
+display(df)
+
+# Option 2: Load as pandas DataFrame
+pdf = client.read_pandas_df(updated_after="2025-12-01")
+
+# Convert pandas to Spark DataFrame if needed
+df_from_pandas = spark.createDataFrame(pdf)
+display(df_from_pandas)
+```
+
+**Alternative - Install from Specific Branch:**
+```python
+%pip install git+https://github.com/guanjieshen/petrinex-python-api.git@feature/ngl-gas-support
+```
+
+## Testing
+
+```bash
+# Unit tests only
+pytest tests/ -v
+
+# Include integration tests (requires network)
+pytest tests/ -v -m integration
+
+# With coverage
+pytest tests/ --cov=petrinex
+```
 
 ## Requirements
 
@@ -142,15 +165,25 @@ See [databricks_example.ipynb](databricks_example.ipynb) for a complete working 
 - PySpark 3.0+
 - pandas, requests, beautifulsoup4, lxml
 
-## License
+## Troubleshooting
 
-MIT - see [LICENSE](LICENSE)
+| Issue | Fix |
+|-------|-----|
+| "No data loaded" | Use an earlier date |
+| Memory errors | Increase driver memory or use `from_date` for backfills |
+| `AttributeError` | Restart kernel: `%restart_python` |
 
 ## Links
 
 - 📦 [PyPI](https://pypi.org/project/petrinex/)
 - 📓 [Example Notebook](databricks_example.ipynb)
+- 🧪 [Tests](tests/)
+- 📋 [Changelog](CHANGELOG.md)
 - 🐛 [Issues](https://github.com/guanjieshen/petrinex-python-api/issues)
+
+## License
+
+MIT - see [LICENSE](LICENSE)
 
 ---
 

@@ -24,16 +24,47 @@ class PetrinexFile:
     url: str  # download URL
 
 
-class PetrinexVolumetricsClient:
+# Supported data types
+SUPPORTED_DATA_TYPES = {
+    "Vol": "Conventional Volumetrics",
+    "NGL": "NGL and Marketable Gas Volumes",
+}
+
+
+class PetrinexClient:
     """
-    Finds Petrinex Conventional Volumetric months "updated after" a cutoff date
-    (matching the UI behavior) and reads them into Spark.
+    Client for accessing Petrinex data (Volumetrics, NGL, Marketable Gas) from Alberta.
+    
+    Finds files "updated after" a cutoff date (matching the UI behavior) and reads them into Spark or pandas.
 
     Two read modes:
       1) Spark direct read from HTTPS URLs (may be blocked by UC / ANY FILE privilege)
       2) Pandas driver-side download -> Spark DataFrame (avoids Spark file permissions)
 
     No explicit user-managed disk writes.
+    
+    Parameters
+    ----------
+    spark : SparkSession
+        Active Spark session
+    jurisdiction : str, default "AB"
+        Jurisdiction code (e.g., "AB" for Alberta)
+    data_type : str, default "Vol"
+        Type of data to load: 
+        - "Vol" (Conventional Volumetrics)
+        - "NGL" (Natural Gas Liquids and Marketable Gas Volumes)
+    file_format : str, default "CSV"
+        File format: "CSV" or "XML"
+    
+    Examples
+    --------
+    # Volumetrics
+    client = PetrinexClient(spark=spark, data_type="Vol")
+    df = client.read_spark_df(updated_after="2025-12-01")
+    
+    # NGL and Marketable Gas Volumes
+    ngl_client = PetrinexClient(spark=spark, data_type="NGL")
+    ngl_df = ngl_client.read_spark_df(updated_after="2025-12-01")
     """
 
     _DATE_FMT = "%Y-%m-%d"
@@ -46,6 +77,7 @@ class PetrinexVolumetricsClient:
         self,
         spark,
         jurisdiction: str = "AB",
+        data_type: str = "Vol",  # "Vol", "NGL", or "Gas"
         file_format: str = "CSV",  # "CSV" or "XML" (Spark direct mode only; pandas mode supports CSV)
         publicdata_url: Optional[str] = None,
         files_base_url: str = "https://www.petrinex.gov.ab.ca/publicdata/API/Files",
@@ -55,6 +87,7 @@ class PetrinexVolumetricsClient:
     ):
         self.spark = spark
         self.jurisdiction = jurisdiction.upper()
+        self.data_type = data_type
         self.file_format = file_format.upper()
         self.publicdata_url = (
             publicdata_url
@@ -64,6 +97,13 @@ class PetrinexVolumetricsClient:
         self.request_timeout_s = request_timeout_s
         self.user_agent = user_agent
         self.html_parser = html_parser
+
+        # Validate data_type
+        if self.data_type not in SUPPORTED_DATA_TYPES:
+            raise ValueError(
+                f"data_type must be one of {list(SUPPORTED_DATA_TYPES.keys())}, "
+                f"got '{data_type}'"
+            )
 
         if self.file_format not in {"CSV", "XML"}:
             raise ValueError("file_format must be 'CSV' or 'XML'")
@@ -490,8 +530,14 @@ class PetrinexVolumetricsClient:
             return zip_content
     
     def _build_download_url(self, ym: str) -> str:
-        # Example: https://www.petrinex.gov.ab.ca/publicdata/API/Files/AB/Vol/2025-09/CSV
-        return f"{self.files_base_url}/{self.jurisdiction}/Vol/{ym}/{self.file_format}"
+        """
+        Build download URL based on data type.
+        
+        Both Vol and NGL use the same URL pattern:
+        Vol: https://www.petrinex.gov.ab.ca/publicdata/API/Files/AB/Vol/2025-09/CSV
+        NGL: https://www.petrinex.gov.ab.ca/publicdata/API/Files/AB/NGL/2024-11/CSV
+        """
+        return f"{self.files_base_url}/{self.jurisdiction}/{self.data_type}/{ym}/{self.file_format}"
 
     def _fetch_publicdata_html(self) -> str:
         r = requests.get(
@@ -507,11 +553,37 @@ class PetrinexVolumetricsClient:
         Extract { 'YYYY-MM': latest_updated_datetime } by scanning table rows for:
           - a YYYY-MM token
           - a timestamp token
+        
+        Attempts to filter by data_type section if found in HTML.
         """
         soup = BeautifulSoup(html, self.html_parser)
         month_to_updated: Dict[str, datetime] = {}
-
-        for tr in soup.find_all("tr"):
+        
+        # Try to find the section corresponding to our data type
+        # Look for headers or sections containing the data type name
+        data_type_section = None
+        data_type_name = SUPPORTED_DATA_TYPES.get(self.data_type, "").lower()
+        
+        # Strategy 1: Look for a div/section with ID or class matching data type
+        for section_id in [self.data_type.lower(), f"section-{self.data_type.lower()}"]:
+            data_type_section = soup.find(id=section_id) or soup.find(class_=section_id)
+            if data_type_section:
+                break
+        
+        # Strategy 2: Look for headers containing the data type name
+        if not data_type_section and data_type_name:
+            for header in soup.find_all(['h1', 'h2', 'h3', 'h4']):
+                if data_type_name in header.get_text().lower() or self.data_type.lower() in header.get_text().lower():
+                    # Find the next table after this header
+                    data_type_section = header.find_next('table')
+                    if data_type_section:
+                        break
+        
+        # If we found a specific section, search only within it; otherwise search whole page
+        search_scope = data_type_section if data_type_section else soup
+        
+        # Extract month/update pairs from table rows
+        for tr in search_scope.find_all("tr"):
             text = tr.get_text(" ", strip=True)
 
             m = self._MONTH_RE.search(text)
@@ -526,3 +598,20 @@ class PetrinexVolumetricsClient:
                 month_to_updated[ym] = updated_dt
 
         return month_to_updated
+
+
+# -----------------------------
+# Backward Compatibility
+# -----------------------------
+class PetrinexVolumetricsClient(PetrinexClient):
+    """
+    Backward compatibility alias for PetrinexClient with data_type='Vol'.
+    
+    DEPRECATED: Use PetrinexClient(data_type="Vol") instead.
+    
+    This class is maintained for backward compatibility with existing code.
+    """
+    def __init__(self, spark, jurisdiction: str = "AB", **kwargs):
+        # Force data_type to "Vol" for backward compatibility
+        kwargs.pop('data_type', None)  # Remove if accidentally passed
+        super().__init__(spark, jurisdiction=jurisdiction, data_type="Vol", **kwargs)
