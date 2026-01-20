@@ -5,6 +5,24 @@ All notable changes to the Petrinex Python API will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-01-20
+
+### Fixed
+- **VoidType Column Handling**: Automatically detects and drops columns with `VoidType` (all-NULL columns)
+  - Prevents "Could not find column" errors when querying Delta tables
+  - Happens when pandas DataFrame has all-NULL columns that Spark can't infer type for
+  - Logs which columns are dropped for transparency
+  - Example: `⚠️  Dropping 1 void column(s) (all NULL): ['Heat']`
+
+### Changed
+- **Enhanced Delta Schema Evolution**: Added `spark.databricks.delta.schema.autoMerge.enabled="true"` option
+  - Provides additional safety for schema changes
+  - Works alongside existing `mergeSchema="true"` setting
+- **Improved Error Messages**: Schema mismatch errors now include:
+  - Clear explanation of the issue
+  - 3 specific solutions with example commands
+  - Guidance on how to fix incompatible schemas
+
 ## [1.1.0] - 2026-01-20
 
 ### Added

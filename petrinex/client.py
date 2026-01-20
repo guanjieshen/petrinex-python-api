@@ -397,6 +397,13 @@ class PetrinexClient:
 
                 sdf = self.spark.createDataFrame(pdf)
                 
+                # Drop void columns (columns with all NULL values that couldn't be typed)
+                # This prevents VoidType errors in Delta tables
+                void_columns = [field.name for field in sdf.schema.fields if str(field.dataType) == 'VoidType']
+                if void_columns:
+                    print(f"  ⚠️  Dropping {len(void_columns)} void column(s) (all NULL): {void_columns}")
+                    sdf = sdf.drop(*void_columns)
+                
                 # Write directly to UC table if specified (avoids memory accumulation)
                 if uc_table:
                     # Validate schema compatibility on first file if table exists
@@ -411,7 +418,11 @@ class PetrinexClient:
                                 f"Schema mismatch: Table '{uc_table}' has columns that are missing in the new data: {missing_in_new}. "
                                 f"Existing table columns: {sorted(existing_table_columns)}. "
                                 f"New DataFrame columns: {sorted(new_columns)}. "
-                                f"This suggests you may be trying to write incompatible data to this table."
+                                f"\n\nThis means your existing table has columns that no longer exist in the Petrinex data. "
+                                f"\n\nTo fix this, choose one of these options:"
+                                f"\n  1. Truncate and reload: spark.sql('TRUNCATE TABLE {uc_table}') then reload"
+                                f"\n  2. Drop and recreate: spark.sql('DROP TABLE {uc_table}') then reload"
+                                f"\n  3. Use a new table name: uc_table='...v2'"
                             )
                         
                         # Check for new columns (informational)
@@ -421,9 +432,11 @@ class PetrinexClient:
                         else:
                             print(f"  ✓ Schema matches existing table")
                     
-                    sdf.write.format("delta").mode("append").option(
-                        "mergeSchema", "true"
-                    ).saveAsTable(uc_table)
+                    sdf.write.format("delta") \
+                        .mode("append") \
+                        .option("mergeSchema", "true") \
+                        .option("spark.databricks.delta.schema.autoMerge.enabled", "true") \
+                        .saveAsTable(uc_table)
                     files_loaded += 1
                     print(f"✓ ({len(pdf):,} rows) → {uc_table}")
                 else:
