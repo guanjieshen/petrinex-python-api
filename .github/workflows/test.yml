@@ -14,7 +14,7 @@ jobs:
     
     strategy:
       matrix:
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
     
     steps:
     - name: Checkout code
@@ -41,5 +41,10 @@ jobs:
     
     - name: Test import
       run: |
-        python -c "from petrinex import PetrinexVolumetricsClient, PetrinexFile; print('✓ Import successful')"
+        python -c "from petrinex import PetrinexClient, PetrinexFile; print('✓ Import successful')"
+    
+    - name: Run unit tests
+      run: |
+        pip install -e ".[dev]"
+        pytest tests/test_client.py -v
 

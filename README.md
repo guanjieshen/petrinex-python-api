@@ -4,7 +4,10 @@ Load Alberta Petrinex data (Volumetrics, NGL) into Spark/pandas DataFrames.
 
 > **Note:** Currently supports Alberta (AB) jurisdiction only.
 
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://img.shields.io/pypi/v/petrinex.svg)](https://pypi.org/project/petrinex/)
+[![Downloads](https://pepy.tech/badge/petrinex)](https://pepy.tech/project/petrinex)
+[![Build Status](https://github.com/guanjieshen/petrinex-python-api/workflows/Tests/badge.svg)](https://github.com/guanjieshen/petrinex-python-api/actions?query=workflow%3ATests)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Features
