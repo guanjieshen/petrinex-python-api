@@ -9,7 +9,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="petrinex",
-    version="0.3.0",
+    version="1.0.1",
     author="Guanjie Shen",
     description="Load Alberta Petrinex data (Volumetrics, NGL) into Spark/pandas DataFrames",
     long_description=long_description,

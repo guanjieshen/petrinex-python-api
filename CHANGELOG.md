@@ -5,6 +5,26 @@ All notable changes to the Petrinex Python API will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-01-19
+
+### Changed
+- Updated Python version requirement from 3.7+ to 3.8+ (Python 3.7 reached EOL June 2023)
+- GitHub Actions now tests on Python 3.8, 3.9, 3.10, 3.11, and 3.12
+- Fixed `.gitignore` to allow test files in `tests/` directory while ignoring temporary test files in root
+- Added comprehensive badges to README (PyPI version, downloads, build status)
+- Updated copyright to Guanjie Shen 2026
+- Improved package metadata in `setup.py` and `pyproject.toml`
+
+### Added
+- Unit tests now run in CI/CD pipeline
+- `requirements.txt` for explicit dependency management
+- Better README badges and documentation
+- Databricks Serverless compatibility note
+
+### Fixed
+- GitHub Actions workflow updated to work with modern Ubuntu runners
+- Test import updated to use `PetrinexClient` instead of deprecated `PetrinexVolumetricsClient`
+
 ## [0.3.0] - 2026-01-19
 
 ### Added

@@ -35,7 +35,7 @@ from petrinex.client import (
     SUPPORTED_DATA_TYPES,
 )
 
-__version__ = "0.3.0"
+__version__ = "1.0.1"
 __all__ = [
     "PetrinexClient",
     "PetrinexVolumetricsClient",  # Backward compatibility
