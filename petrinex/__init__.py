@@ -21,6 +21,9 @@ Usage:
     # For pandas DataFrame (any data type):
     pdf = client.read_pandas_df(updated_after="2025-12-01")
     
+    # Download files to local directory:
+    paths = client.download_files(output_dir="./data", updated_after="2025-12-01")
+    
     # Backward compatibility: PetrinexVolumetricsClient still works
     from petrinex import PetrinexVolumetricsClient
     client = PetrinexVolumetricsClient(spark=spark)  # Defaults to Vol data

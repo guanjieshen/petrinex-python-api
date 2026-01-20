@@ -2,8 +2,6 @@
 
 Load Alberta Petrinex data (Volumetrics, NGL) into Spark/pandas DataFrames.
 
-> **Note:** Currently supports Alberta (AB) jurisdiction only.
-
 [![PyPI version](https://img.shields.io/pypi/v/petrinex.svg)](https://pypi.org/project/petrinex/)
 [![Downloads](https://pepy.tech/badge/petrinex)](https://pepy.tech/project/petrinex)
 [![Build Status](https://github.com/guanjieshen/petrinex-python-api/workflows/Tests/badge.svg)](https://github.com/guanjieshen/petrinex-python-api/actions?query=workflow%3ATests)
@@ -12,10 +10,12 @@ Load Alberta Petrinex data (Volumetrics, NGL) into Spark/pandas DataFrames.
 
 ## Features
 
-- ✅ Unity Catalog & Databricks Serverless compatible
-- ✅ Memory efficient - handles 60+ files without OOM
-- ✅ Zero config - automatic ZIP extraction, encoding, error handling
-- ✅ Multiple data types - Volumetrics and NGL support
+- ✅ **Databricks Serverless** - Full Unity Catalog support
+- ✅ **Memory Efficient** - Handles 100+ files without OOM
+- ✅ **Zero Config** - Automatic ZIP extraction, encoding, error handling
+- ✅ **Multiple Data Types** - Volumetrics (Vol) and NGL support
+
+> **Note:** Currently supports Alberta (AB) jurisdiction only.
 
 ## Quick Start
 
@@ -26,12 +26,12 @@ pip install petrinex
 ```python
 from petrinex import PetrinexClient
 
-# Volumetrics (Alberta only)
-client = PetrinexClient(spark=spark, jurisdiction="AB", data_type="Vol")
+# Volumetrics data
+client = PetrinexClient(spark=spark, data_type="Vol")
 df = client.read_spark_df(updated_after="2025-12-01")
 
 # NGL and Marketable Gas
-ngl_client = PetrinexClient(spark=spark, jurisdiction="AB", data_type="NGL")
+ngl_client = PetrinexClient(spark=spark, data_type="NGL")
 ngl_df = ngl_client.read_spark_df(updated_after="2025-12-01")
 ```
 
@@ -45,23 +45,74 @@ df = client.read_spark_df(updated_after="2025-12-01")
 
 # pandas DataFrame
 pdf = client.read_pandas_df(updated_after="2025-12-01")
+
+# Date range
+df = client.read_spark_df(from_date="2021-01-01", end_date="2023-12-31")
 ```
 
-**Date Options:**
+**Date Parameters:**
 - `updated_after="2025-12-01"` - Files modified after this date
 - `from_date="2021-01-01"` - All data from production month onwards
+- `end_date="2023-12-31"` - Optional end date (use with `from_date`)
 
-### Supported Data Types
+### Download Files
 
-| Type | Description |
-|------|-------------|
-| `Vol` | Conventional Volumetrics |
-| `NGL` | NGL and Marketable Gas Volumes |
+Download Petrinex files to your local machine. Files are extracted from ZIP and organized in subdirectories by production month:
+
+```python
+# Download recent updates
+paths = client.download_files(
+    output_dir="./petrinex_data",
+    updated_after="2025-12-01"
+)
+# Creates: ./petrinex_data/2025-12/Vol_2025-12.csv
+
+# Historical range
+paths = client.download_files(
+    output_dir="./data",
+    from_date="2021-01-01",
+    end_date="2023-12-31"
+)
+```
+
+### Large Data Loads (Unity Catalog)
+
+For large data loads (20+ files), write directly to Unity Catalog to avoid memory issues and timeouts:
+
+```python
+# Write directly to UC table (avoids memory accumulation)
+df = client.read_spark_df(
+    from_date="2020-01-01",
+    uc_table="main.petrinex.volumetrics"
+)
+
+# Incremental updates
+df = client.read_spark_df(
+    updated_after="2025-12-01",
+    uc_table="main.petrinex.volumetrics"
+)
+
+# Full refresh (truncate first)
+spark.sql("TRUNCATE TABLE main.petrinex.volumetrics")
+df = client.read_spark_df(from_date="2020-01-01", uc_table="main.petrinex.volumetrics")
+```
+
+**Benefits:**
+- ✅ No memory accumulation
+- ✅ No Spark Connect timeouts
+- ✅ Automatic schema evolution
+- ✅ Handles 100+ files
+- ✅ Provenance & schema validation
+
+**Safety Features:**
+- Provenance validation (checks for required columns)
+- Schema validation (ensures compatibility)
+- Schema evolution (adds new columns automatically)
+- Append-only mode (no accidental overwrites)
 
 ## Databricks
 
 ```python
-# Install from GitHub
 %pip install git+https://github.com/guanjieshen/petrinex-python-api.git
 
 from petrinex import PetrinexClient
@@ -73,24 +124,12 @@ display(df)
 
 See [databricks_example.ipynb](databricks_example.ipynb) for complete example.
 
-## Examples
+## Data Types
 
-### Incremental Updates
-
-```python
-last_update = spark.sql(
-    "SELECT MAX(file_updated_ts) FROM main.petrinex.volumetrics"
-).first()[0]
-
-df = client.read_spark_df(updated_after=last_update.split()[0])
-```
-
-### Historical Backfill
-
-```python
-df = client.read_spark_df(from_date="2020-01-01")
-df.write.format("delta").mode("overwrite").saveAsTable("main.petrinex.volumetrics")
-```
+| Type | Description |
+|------|-------------|
+| `Vol` | Conventional Volumetrics (oil & gas production) |
+| `NGL` | NGL and Marketable Gas Volumes |
 
 ## Installation
 
@@ -110,21 +149,23 @@ pip install -e ".[dev]"
 ## Testing
 
 ```bash
-pytest tests/ -v                    # Unit tests
-pytest tests/ -v -m integration     # Include integration tests
-pytest tests/ --cov=petrinex        # With coverage
+# Run all tests
+pytest tests/ -v
+
+# With coverage
+pytest tests/ --cov=petrinex --cov-report=html
+
+# Integration tests (requires network)
+pytest tests/ -v -m integration
 ```
 
 ## Links
 
 - 📦 [PyPI](https://pypi.org/project/petrinex/)
 - 📓 [Databricks Example](databricks_example.ipynb)
-- 🧪 [Tests](tests/)
 - 📋 [Changelog](CHANGELOG.md)
-- 🤝 [Contributing](CONTRIBUTING.md)
+- 🧪 [Tests](tests/)
 
 ## License
 
 MIT License - Copyright (c) 2026 Guanjie Shen
-
-See [LICENSE](LICENSE) for full details.

@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.1] - 2026-01-19
 
+### Added
+- **Local File Download API**: New `download_files()` method to download Petrinex files to local directory
+  - Supports all date parameters: `updated_after`, `since`, `from_date`, `end_date`
+  - Files extracted from ZIP format and saved as CSVs
+  - Organized in subdirectories by production month (e.g., `output_dir/2025-12/Vol_2025-12.csv`)
+  - Example: `paths = client.download_files(output_dir="./data", updated_after="2025-12-01")`
+  - Graceful error handling with progress tracking
+  - Returns list of downloaded file paths
+- **Unity Catalog Direct Write**: New `uc_table` parameter for `read_spark_df()`
+  - Write each file directly to a Unity Catalog Delta table instead of accumulating in memory
+  - Solves Spark Connect timeout issues for large data loads (20+ files)
+  - Example: `client.read_spark_df(from_date="2020-01-01", uc_table="main.petrinex.volumetrics")`
+  - Always uses append mode (safer, no accidental overwrites)
+  - **Safety validation**: Only appends to tables created by this library (checks for provenance columns)
+  - **Schema validation**: Validates existing table columns are present in new data before writing
+  - **Schema evolution**: Supports adding new columns automatically (via mergeSchema)
+  - Prevents accidentally appending to wrong tables or incompatible schemas
+  - Clear error messages if schema mismatch detected
+  - To replace data, truncate the table first: `spark.sql("TRUNCATE TABLE ...")`
+  - Can handle 100+ files without memory or timeout issues
+- **Date Range Support**: New optional `end_date` parameter for `read_spark_df()` and `read_pandas_df()`
+  - Use with `from_date` to load data for specific date ranges
+  - Example: `client.read_spark_df(from_date="2021-01-01", end_date="2023-12-31")`
+  - Filters production months to only include data up to the specified end date
+- Unit tests for `end_date` validation and filtering logic
+
 ### Changed
 - Updated Python version requirement from 3.7+ to 3.8+ (Python 3.7 reached EOL June 2023)
 - GitHub Actions now tests on Python 3.8, 3.9, 3.10, 3.11, and 3.12
@@ -14,12 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added comprehensive badges to README (PyPI version, downloads, build status)
 - Updated copyright to Guanjie Shen 2026
 - Improved package metadata in `setup.py` and `pyproject.toml`
-
-### Added
-- Unit tests now run in CI/CD pipeline
-- `requirements.txt` for explicit dependency management
-- Better README badges and documentation
-- Databricks Serverless compatibility note
+- Enhanced documentation with date range examples in README, example.py, and databricks_example.ipynb
 
 ### Fixed
 - GitHub Actions workflow updated to work with modern Ubuntu runners
