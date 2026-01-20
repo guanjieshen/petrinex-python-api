@@ -126,10 +126,25 @@ See [databricks_example.ipynb](databricks_example.ipynb) for complete example.
 
 ## Data Types
 
-| Type | Description |
-|------|-------------|
-| `Vol` | Conventional Volumetrics (oil & gas production) |
-| `NGL` | NGL and Marketable Gas Volumes |
+| Type | Description | Official Documentation |
+|------|-------------|------------------------|
+| `Vol` | Conventional Volumetrics (oil & gas production) | [PDF](https://www.aer.ca/providing-information/data-and-reports/statistical-reports/st39) |
+| `NGL` | NGL and Marketable Gas Volumes | [PDF](https://www.aer.ca/providing-information/data-and-reports/statistical-reports/st39) |
+
+### Schema Documentation
+
+The library applies explicit Spark schemas based on official Petrinex documentation:
+
+**Volumetrics Schema:**
+- 30 columns including `Heat` (Decimal 5,2), `Volume`/`Energy` (Decimal 13,3), `Hours` (Integer), `SubmissionDate` (Date)
+- See [petrinex/schema.py](petrinex/schema.py) for complete schema definition
+- Reference: [AER Statistical Reports - ST39](https://www.aer.ca/providing-information/data-and-reports/statistical-reports/st39)
+
+**NGL Schema:**
+- 26 columns including `GasProduction`, `EthaneMixVolume`, `PropaneSpecVolume` (all Decimal 10,1)
+- No `Heat` column (specific to Volumetrics)
+- See [petrinex/schema.py](petrinex/schema.py) for complete schema definition
+- Reference: [AER Statistical Reports - ST39](https://www.aer.ca/providing-information/data-and-reports/statistical-reports/st39)
 
 ## Installation
 

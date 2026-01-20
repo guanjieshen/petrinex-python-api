@@ -17,6 +17,8 @@ import requests
 from bs4 import BeautifulSoup
 from pyspark.sql import DataFrame
 
+from .schema import get_schema_for_data_type
+
 
 @dataclass(frozen=True)
 class PetrinexFile:
@@ -395,38 +397,40 @@ class PetrinexClient:
                     pdf["file_updated_ts"] = f.updated_ts.strftime(self._TS_FMT)
                     pdf["source_url"] = f.url
 
-                sdf = self.spark.createDataFrame(pdf)
+                # Add missing columns from official schema to ensure consistency
+                # All columns get explicit types from schema definition
+                base_schema = get_schema_for_data_type(self.data_type)
+                schema_fields = {field.name: field for field in base_schema.fields}
+                pdf_columns = set(pdf.columns)
+                schema_columns = set(schema_fields.keys())
                 
-                # Drop void columns (columns with all NULL values that couldn't be typed)
-                # This prevents VoidType errors in Delta tables
-                void_columns = [field.name for field in sdf.schema.fields if str(field.dataType) == 'VoidType']
-                if void_columns:
-                    print(f"  ⚠️  Dropping {len(void_columns)} void column(s) (all NULL): {void_columns}")
-                    sdf = sdf.drop(*void_columns)
+                # Add missing schema columns with NULL values
+                missing_cols = schema_columns - pdf_columns
+                if missing_cols:
+                    for col in missing_cols:
+                        pdf[col] = None
+                
+                # Convert to Spark DataFrame with explicit schema
+                # Build schema: official schema columns + extra columns (e.g., provenance)
+                from pyspark.sql.types import StructType, StructField, StringType
+                actual_fields = []
+                
+                # First, add columns in the order they appear in pandas DataFrame
+                for col in pdf.columns:
+                    if col in schema_fields:
+                        actual_fields.append(schema_fields[col])
+                    else:
+                        # For columns not in base schema (e.g., provenance), use StringType
+                        actual_fields.append(StructField(col, StringType(), True))
+                
+                actual_schema = StructType(actual_fields)
+                sdf = self.spark.createDataFrame(pdf, schema=actual_schema)
                 
                 # Write directly to UC table if specified (avoids memory accumulation)
                 if uc_table:
-                    # Validate schema compatibility on first file if table exists
+                    # Check schema compatibility (informational only, mergeSchema handles it)
                     if uc_table_exists and files_loaded == 0:
-                        new_columns = set(sdf.columns)
-                        
-                        # Check: Do existing table columns exist in new DataFrame?
-                        # (New columns are OK - schema evolution, but missing columns are not)
-                        missing_in_new = existing_table_columns - new_columns
-                        if missing_in_new:
-                            raise ValueError(
-                                f"Schema mismatch: Table '{uc_table}' has columns that are missing in the new data: {missing_in_new}. "
-                                f"Existing table columns: {sorted(existing_table_columns)}. "
-                                f"New DataFrame columns: {sorted(new_columns)}. "
-                                f"\n\nThis means your existing table has columns that no longer exist in the Petrinex data. "
-                                f"\n\nTo fix this, choose one of these options:"
-                                f"\n  1. Truncate and reload: spark.sql('TRUNCATE TABLE {uc_table}') then reload"
-                                f"\n  2. Drop and recreate: spark.sql('DROP TABLE {uc_table}') then reload"
-                                f"\n  3. Use a new table name: uc_table='...v2'"
-                            )
-                        
-                        # Check for new columns (informational)
-                        new_cols = new_columns - existing_table_columns
+                        new_cols = set(sdf.columns) - existing_table_columns
                         if new_cols:
                             print(f"  ℹ️  Schema evolution: Adding {len(new_cols)} new column(s): {sorted(new_cols)}")
                         else:

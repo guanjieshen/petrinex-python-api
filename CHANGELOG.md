@@ -5,19 +5,55 @@ All notable changes to the Petrinex Python API will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Repository Cleanup**: Streamlined repository structure for better maintainability
+  - Moved `manual_e2e_test.py` to `tests/` directory
+  - Removed redundant `example.py` (functionality covered by `databricks_example.ipynb`)
+  - Removed large PDF files from repository, added links to official AER documentation in README
+  - Removed unnecessary `tests/__init__.py`
+  - Updated README with schema documentation and official documentation links
+
+### Documentation
+- Added schema documentation section to README with links to official AER ST39 reports
+- Updated data types table with official documentation references
+- Added detailed schema information (column counts, data types) for Volumetrics and NGL
+
 ## [1.1.1] - 2026-01-20
 
 ### Fixed
-- **VoidType Column Handling**: Automatically detects and drops columns with `VoidType` (all-NULL columns)
-  - Prevents "Could not find column" errors when querying Delta tables
-  - Happens when pandas DataFrame has all-NULL columns that Spark can't infer type for
-  - Logs which columns are dropped for transparency
-  - Example: `⚠️  Dropping 1 void column(s) (all NULL): ['Heat']`
+- **Explicit Schema Application**: Now applies official Petrinex schema from PDF documentation
+  - Fixes "Could not find Heat#..." and similar schema errors
+  - All columns from official schema are present in every DataFrame (with NULL if not in file)
+  - Heat column defined as `Decimal(5,2)` per spec, even when NULL
+  - Volume, Energy defined as `Decimal(13,3)`, Hours as `Integer`, etc.
+  - Ensures consistent schema across all files regardless of which columns have data
+  - Explicit types ensure correct data types (no type inference issues)
+  - Reference: PD_Conventional_Volumetrics_Report.pdf (Data Fields section)
 
 ### Changed
+- **Schema Module**: Separated schema definitions into dedicated `petrinex/schema.py`
+  - Better code organization and maintainability
+  - Schema definitions in one place, easy to update
+  - New public functions: `get_volumetrics_schema()`, `get_ngl_schema()`, `get_schema_for_data_type()`
+  - Users can now import schemas directly: `from petrinex import get_volumetrics_schema`
+  - **NGL Schema**: Implemented proper NGL schema (26 columns) per PDF documentation
+  - Volumetrics: 30 columns, NGL: 26 columns (completely different schemas)
+  - No breaking changes - backward compatible
+
+### Added
+- **Schema Tests**: Comprehensive test suite in `tests/test_schema.py` (15 tests)
+  - Tests schema structure and column definitions
+  - Verifies all columns have explicit types
+  - Tests data type correctness (Decimal, Integer, Date, String)
+  - Integration tests with real Petrinex data downloads
+  - Verifies both Volumetrics and NGL schemas work correctly
+  - Explicit schemas ensure correct data types in all cases
 - **Enhanced Delta Schema Evolution**: Added `spark.databricks.delta.schema.autoMerge.enabled="true"` option
   - Provides additional safety for schema changes
   - Works alongside existing `mergeSchema="true"` setting
+  - Handles both forward (new columns) and backward (missing columns) schema evolution
 - **Improved Error Messages**: Schema mismatch errors now include:
   - Clear explanation of the issue
   - 3 specific solutions with example commands

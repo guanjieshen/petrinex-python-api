@@ -37,6 +37,11 @@ from petrinex.client import (
     PetrinexFile,
     SUPPORTED_DATA_TYPES,
 )
+from petrinex.schema import (
+    get_volumetrics_schema,
+    get_ngl_schema,
+    get_schema_for_data_type,
+)
 
 __version__ = "1.1.1"
 __all__ = [
@@ -44,5 +49,8 @@ __all__ = [
     "PetrinexVolumetricsClient",  # Backward compatibility
     "PetrinexFile",
     "SUPPORTED_DATA_TYPES",
+    "get_volumetrics_schema",
+    "get_ngl_schema",
+    "get_schema_for_data_type",
 ]
 
