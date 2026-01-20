@@ -1,4 +1,7 @@
-# %pip install beautifulsoup4 lxml pandas   # run once if needed
+"""Petrinex API Client for loading Alberta energy data.
+
+Copyright (c) 2026 Guanjie Shen
+"""
 
 from __future__ import annotations
 
@@ -12,9 +15,7 @@ import zipfile
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-
 from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
 
 
 @dataclass(frozen=True)
@@ -184,6 +185,7 @@ class PetrinexClient:
             "source_url STRING, production_month STRING, file_updated_ts STRING",
         )
 
+        from pyspark.sql import functions as F
         return df.withColumn("source_url", F.input_file_name()).join(
             mapping_df, on="source_url", how="left"
         )
@@ -310,8 +312,7 @@ class PetrinexClient:
                 
                 # Periodically checkpoint to avoid long lineage (every 10 files)
                 if files_loaded % 10 == 0:
-                    combined.cache()
-                    row_count = combined.count()  # Materialize
+                    row_count = combined.count()  # Materialize to break lineage
                     print(f"  → Checkpointed at {files_loaded} files ({row_count:,} total rows)")
                 
             except requests.exceptions.HTTPError as e:

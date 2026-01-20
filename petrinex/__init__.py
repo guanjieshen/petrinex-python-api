@@ -2,6 +2,8 @@
 Petrinex Python API
 ===================
 
+Copyright (c) 2026 Guanjie Shen
+
 A Python client for accessing Petrinex data (Volumetrics, NGL) with Spark or pandas.
 
 Usage:

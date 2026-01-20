@@ -55,7 +55,7 @@ def main():
         print(f"\nLoading files updated after {cutoff}...")
         df = client.read_spark_df(updated_after=cutoff)
         
-        df.cache()
+        # Note: .cache() not used - not compatible with Databricks Serverless
         print(f"✓ Loaded {df.count():,} rows")
         print(f"✓ Columns: {len(df.columns)}")
         
