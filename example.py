@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-Example: Load Alberta Petrinex volumetric data
+Petrinex API Example - Load Volumetrics and NGL Data
 
-This example demonstrates the memory-efficient loading of Petrinex data
-using the PetrinexVolumetricsClient.
+Demonstrates:
+- Loading different data types (Vol, NGL)
+- Incremental updates
+- Historical backfills
+- Data exploration
 """
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from petrinex import PetrinexVolumetricsClient
+from petrinex import PetrinexClient, SUPPORTED_DATA_TYPES
+from datetime import datetime, timedelta
+
 
 def main():
     # Create Spark session
@@ -19,94 +24,82 @@ def main():
         .config("spark.driver.memory", "8g") \
         .getOrCreate()
     
-    # Initialize Petrinex client
-    print("Initializing client...")
-    client = PetrinexVolumetricsClient(
-        spark=spark,
-        jurisdiction="AB",
-        file_format="CSV"
-    )
+    # Show supported data types
+    print("\n" + "="*70)
+    print("SUPPORTED DATA TYPES")
+    print("="*70)
+    for data_type, description in SUPPORTED_DATA_TYPES.items():
+        print(f"  • {data_type}: {description}")
     
     # Example 1: List available files
     print("\n" + "="*70)
-    print("EXAMPLE 1: List files updated in the last 30 days")
+    print("EXAMPLE 1: List available files")
     print("="*70)
     
-    from datetime import datetime, timedelta
+    client = PetrinexClient(spark=spark, data_type="Vol")
     cutoff = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     
     files = client.list_updated_after(cutoff)
-    print(f"\nFound {len(files)} file(s):")
+    print(f"\nFound {len(files)} file(s) updated after {cutoff}:")
     for f in files[:5]:
         print(f"  • {f.production_month}: Updated {f.updated_ts}")
     if len(files) > 5:
         print(f"  ... and {len(files) - 5} more")
     
-    # Example 2: Load data (memory efficient)
+    # Example 2: Load data (incremental)
     print("\n" + "="*70)
-    print("EXAMPLE 2: Load data with progress tracking")
+    print("EXAMPLE 2: Load data (incremental)")
     print("="*70)
     
-    # Load data - two date options:
-    # - updated_after="2025-12-01" → files updated AFTER this date (incremental)
-    # - from_date="2021-01-01" → ALL data from this production month onwards
+    if files:
+        print(f"\nLoading files updated after {cutoff}...")
+        df = client.read_spark_df(updated_after=cutoff)
+        
+        # Note: .cache() not used - not compatible with Databricks Serverless
+        print(f"✓ Loaded {df.count():,} rows")
+        print(f"✓ Columns: {len(df.columns)}")
+        
+        print("\nSchema (first 5 columns):")
+        for field in df.schema.fields[:5]:
+            print(f"  • {field.name}: {field.dataType}")
+        
+        print("\nSample data:")
+        df.show(5, truncate=True)
+    else:
+        print(f"\n⚠️  No files found. Try an earlier date.")
     
-    df = client.read_spark_df(updated_after="2025-12-01")  # Change date as needed
-    
-    # Cache for reuse
-    df.cache()
-    
-    print(f"\n✅ Loaded {df.count():,} rows × {len(df.columns)} columns")
-    
-    # Example 3: Display sample data
+    # Example 3: Load NGL data
     print("\n" + "="*70)
-    print("EXAMPLE 3: Display data")
+    print("EXAMPLE 3: Load NGL data")
     print("="*70)
     
-    print("\nSchema (first 10 columns):")
-    for field in df.schema.fields[:10]:
-        print(f"  • {field.name}: {field.dataType}")
-    if len(df.schema.fields) > 10:
-        print(f"  ... and {len(df.schema.fields) - 10} more columns")
-    
-    print("\nSample data:")
-    df.show(5, truncate=False)
-    
-    # Example 4: Aggregate by month
-    print("\n" + "="*70)
-    print("EXAMPLE 4: Aggregate by production month")
-    print("="*70)
-    
-    monthly_summary = df.groupBy("production_month") \
-        .agg(F.count("*").alias("records")) \
-        .orderBy("production_month")
-    
-    monthly_summary.show(truncate=False)
-    
-    # Example 5: Save to Delta (optional)
-    print("\n" + "="*70)
-    print("EXAMPLE 5: Save to Delta table (commented)")
-    print("="*70)
-    
-    print("\nTo save to Delta, uncomment:")
+    print("\nTo load NGL and Marketable Gas data:")
     print("""
-    # Add partitioning columns
-    df_partitioned = df.withColumn("year", F.substring("production_month", 1, 4)) \\
-                       .withColumn("month", F.substring("production_month", 6, 2))
+    ngl_client = PetrinexClient(spark=spark, data_type="NGL")
+    ngl_df = ngl_client.read_spark_df(updated_after="2025-12-01")
+    print(f"NGL data: {ngl_df.count():,} rows")
+    """)
     
-    # Write to Delta
-    df_partitioned.write \\
-        .format("delta") \\
+    # Example 4: Historical backfill
+    print("\n" + "="*70)
+    print("EXAMPLE 4: Historical backfill")
+    print("="*70)
+    
+    print("\nTo load all historical data from a date:")
+    print("""
+    # Load all data from 2020 onwards
+    df_historical = client.read_spark_df(from_date="2020-01-01")
+    
+    # Save to Delta table
+    df_historical.write.format("delta") \\
         .mode("overwrite") \\
-        .partitionBy("year", "month") \\
-        .saveAsTable("petrinex.volumetrics_raw")
+        .saveAsTable("main.petrinex.volumetrics")
     """)
     
     print("\n" + "="*70)
-    print("✅ All examples completed!")
+    print("✓ Examples complete!")
     print("="*70)
     
-    # Cleanup
     spark.stop()
 
 
