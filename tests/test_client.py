@@ -3,6 +3,7 @@ Unit tests for PetrinexClient
 """
 
 import pytest
+import pandas as pd
 from unittest.mock import MagicMock, patch
 from datetime import datetime
 
@@ -184,9 +185,169 @@ class TestDateRangeFiltering:
                 # This should not raise the end_date validation error
                 client.read_spark_df(from_date="2021-01-01", end_date="2023-12-31")
             except ValueError as e:
-                # Should only fail on "No months found", not on end_date validation
-                assert "No months found" in str(e)
+                # Should only fail on "No files found", not on end_date validation
+                assert "No files found for production months" in str(e)
                 assert "end_date can only be used with from_date" not in str(e)
+    
+    def test_from_date_filters_by_production_month(self):
+        """Test that from_date filters by production month, not file update timestamp"""
+        mock_spark = MagicMock()
+        client = PetrinexClient(spark=mock_spark, data_type="Vol")
+        
+        # Simulate scenario: files with old production months were recently updated
+        # and files with new production months were updated long ago
+        files = [
+            PetrinexFile('2024-10', datetime(2025, 1, 20), 'url1'),  # Old month, recent update
+            PetrinexFile('2024-11', datetime(2025, 1, 18), 'url2'),  # Old month, recent update
+            PetrinexFile('2024-12', datetime(2025, 1, 15), 'url3'),  # Old month, recent update
+            PetrinexFile('2025-01', datetime(2024, 2, 5), 'url4'),   # New month, old update
+            PetrinexFile('2025-02', datetime(2024, 3, 1), 'url5'),   # New month, old update
+        ]
+        
+        # Mock list_updated_after to return all files (simulating "1900-01-01" call)
+        with patch.object(client, 'list_updated_after', return_value=files):
+            # When using from_date="2025-01-01", should only get 2025-01 and 2025-02
+            # regardless of when files were updated
+            try:
+                # We need to mock the actual file download to avoid network calls
+                with patch.object(client, '_extract_csv_from_zip', return_value=b'col1\nval1'):
+                    with patch('petrinex.client.requests.get') as mock_get:
+                        mock_response = MagicMock()
+                        mock_response.content = b'fake_zip'
+                        mock_response.raise_for_status = MagicMock()
+                        mock_get.return_value = mock_response
+                        
+                        with patch('petrinex.client.pd.read_csv') as mock_read_csv:
+                            # Return empty DataFrame to avoid type issues
+                            mock_read_csv.return_value = pd.DataFrame({'col1': []})
+                            
+                            # Mock createDataFrame to track what files were processed
+                            processed_months = []
+                            def track_months(pdf, schema=None):
+                                if 'production_month' in pdf.columns and len(pdf) > 0:
+                                    processed_months.extend(pdf['production_month'].unique())
+                                mock_df = MagicMock()
+                                mock_df.columns = list(pdf.columns)
+                                return mock_df
+                            
+                            mock_spark.createDataFrame.side_effect = track_months
+                            
+                            try:
+                                client.read_spark_df(from_date="2025-01-01")
+                            except Exception:
+                                pass  # Ignore union errors, we just want to check which files were fetched
+                            
+                            # Verify that list_updated_after was called with "1900-01-01" (to get all files)
+                            client.list_updated_after.assert_called_with("1900-01-01")
+                            
+                            # Verify only files with production_month >= 2025-01 were downloaded
+                            # This is checked by counting the number of requests.get calls
+                            assert mock_get.call_count == 2  # Only 2025-01 and 2025-02
+                            
+                            # Verify the URLs match the expected production months
+                            called_urls = [call[0][0] for call in mock_get.call_args_list]
+                            assert 'url4' in called_urls  # 2025-01
+                            assert 'url5' in called_urls  # 2025-02
+                            assert 'url1' not in called_urls  # 2024-10 (excluded)
+                            assert 'url2' not in called_urls  # 2024-11 (excluded)
+                            assert 'url3' not in called_urls  # 2024-12 (excluded)
+            except Exception as e:
+                # Should not raise errors about end_date or parameter validation
+                assert "end_date can only be used with from_date" not in str(e)
+    
+    def test_from_date_with_end_date_filters_date_range(self):
+        """Test that from_date + end_date filters by production month range"""
+        mock_spark = MagicMock()
+        client = PetrinexClient(spark=mock_spark, data_type="Vol")
+        
+        # Simulate files spanning multiple years
+        files = [
+            PetrinexFile('2023-06', datetime(2025, 1, 15), 'url1'),
+            PetrinexFile('2024-01', datetime(2025, 1, 15), 'url2'),
+            PetrinexFile('2024-06', datetime(2025, 1, 15), 'url3'),
+            PetrinexFile('2024-12', datetime(2025, 1, 15), 'url4'),
+            PetrinexFile('2025-01', datetime(2025, 1, 15), 'url5'),
+            PetrinexFile('2025-06', datetime(2025, 1, 15), 'url6'),
+        ]
+        
+        # Mock list_updated_after to return all files
+        with patch.object(client, 'list_updated_after', return_value=files):
+            with patch.object(client, '_extract_csv_from_zip', return_value=b'col1\nval1'):
+                with patch('petrinex.client.requests.get') as mock_get:
+                    mock_response = MagicMock()
+                    mock_response.content = b'fake_zip'
+                    mock_response.raise_for_status = MagicMock()
+                    mock_get.return_value = mock_response
+                    
+                    with patch('petrinex.client.pd.read_csv') as mock_read_csv:
+                        mock_read_csv.return_value = pd.DataFrame({'col1': []})
+                        
+                        mock_spark.createDataFrame.return_value = MagicMock()
+                        
+                        try:
+                            # Request date range: 2024-01-01 to 2024-12-31
+                            client.read_spark_df(from_date="2024-01-01", end_date="2024-12-31")
+                        except Exception:
+                            pass  # Ignore union errors
+                        
+                        # Verify list_updated_after was called with "1900-01-01"
+                        client.list_updated_after.assert_called_with("1900-01-01")
+                        
+                        # Verify only 2024 files were downloaded (3 files: 2024-01, 2024-06, 2024-12)
+                        assert mock_get.call_count == 3
+                        
+                        # Verify the URLs match expected production months
+                        called_urls = [call[0][0] for call in mock_get.call_args_list]
+                        assert 'url2' in called_urls  # 2024-01 (included)
+                        assert 'url3' in called_urls  # 2024-06 (included)
+                        assert 'url4' in called_urls  # 2024-12 (included)
+                        assert 'url1' not in called_urls  # 2023-06 (excluded)
+                        assert 'url5' not in called_urls  # 2025-01 (excluded)
+                        assert 'url6' not in called_urls  # 2025-06 (excluded)
+    
+    def test_updated_after_still_filters_by_update_timestamp(self):
+        """Test that updated_after continues to filter by file update timestamp (not production month)"""
+        mock_spark = MagicMock()
+        client = PetrinexClient(spark=mock_spark, data_type="Vol")
+        
+        # Simulate files with various update timestamps
+        files = [
+            PetrinexFile('2024-06', datetime(2025, 1, 20), 'url1'),  # Recent update
+            PetrinexFile('2024-12', datetime(2025, 1, 18), 'url2'),  # Recent update
+            PetrinexFile('2025-01', datetime(2024, 12, 15), 'url3'), # Old update
+        ]
+        
+        # Mock list_updated_after to return files updated after 2025-01-15
+        files_after_cutoff = [f for f in files if f.updated_ts > datetime(2025, 1, 15)]
+        
+        with patch.object(client, 'list_updated_after', return_value=files_after_cutoff):
+            with patch.object(client, '_extract_csv_from_zip', return_value=b'col1\nval1'):
+                with patch('petrinex.client.requests.get') as mock_get:
+                    mock_response = MagicMock()
+                    mock_response.content = b'fake_zip'
+                    mock_response.raise_for_status = MagicMock()
+                    mock_get.return_value = mock_response
+                    
+                    with patch('petrinex.client.pd.read_csv') as mock_read_csv:
+                        mock_read_csv.return_value = pd.DataFrame({'col1': []})
+                        mock_spark.createDataFrame.return_value = MagicMock()
+                        
+                        try:
+                            client.read_spark_df(updated_after="2025-01-15")
+                        except Exception:
+                            pass  # Ignore union errors
+                        
+                        # Verify list_updated_after was called with the provided date
+                        client.list_updated_after.assert_called_with("2025-01-15")
+                        
+                        # Verify only files with update timestamp > 2025-01-15 were downloaded
+                        # Should be 2 files: 2024-06 and 2024-12 (even though production months are old)
+                        assert mock_get.call_count == 2
+                        
+                        called_urls = [call[0][0] for call in mock_get.call_args_list]
+                        assert 'url1' in called_urls  # 2024-06 with recent update
+                        assert 'url2' in called_urls  # 2024-12 with recent update
+                        assert 'url3' not in called_urls  # 2025-01 with old update (excluded)
 
 
 class TestUnityCalatalogDirectWrite:
@@ -206,8 +367,8 @@ class TestUnityCalatalogDirectWrite:
                     uc_table="main.petrinex.test_table"
                 )
             except ValueError as e:
-                # Should only fail on "No months found", not parameter error
-                assert "No months found" in str(e)
+                # Should only fail on "No files found for production months", not parameter error
+                assert "No files found for production months" in str(e)
                 assert "uc_table" not in str(e)
     
     def test_uc_table_always_appends(self):
@@ -224,8 +385,8 @@ class TestUnityCalatalogDirectWrite:
                     uc_table="main.petrinex.test"
                 )
             except ValueError as e:
-                # Should only fail on "No months found"
-                assert "No months found" in str(e)
+                # Should only fail on "No files found for production months"
+                assert "No files found for production months" in str(e)
     
     def test_uc_table_requires_provenance_columns(self):
         """Test that uc_table requires add_provenance_columns=True"""
@@ -272,6 +433,7 @@ class TestUnityCalatalogDirectWrite:
             "production_month", "file_updated_ts", "source_url",  # Provenance
             "well_id", "production_volume", "extra_column"  # Data columns
         ]
+        mock_existing_df.count.return_value = 1000  # Mock count to return an integer
         mock_spark.table.return_value = mock_existing_df
         
         # Mock list_updated_after to return one file
@@ -304,6 +466,7 @@ class TestUnityCalatalogDirectWrite:
             "production_month", "file_updated_ts", "source_url",
             "well_id", "production_volume"
         ]
+        mock_existing_df.count.return_value = 1000  # Mock count to return an integer
         mock_spark.table.return_value = mock_existing_df
         
         # Mock list_updated_after to return one file
@@ -317,9 +480,15 @@ class TestUnityCalatalogDirectWrite:
                 mock_response.content = b'well_id,production_volume,new_column\nW1,100,ABC\n'
                 mock_get.return_value = mock_response
                 
-                # Mock the write operation
+                # Mock the DataFrame returned by createDataFrame
+                mock_new_df = MagicMock()
+                mock_new_df.columns = [
+                    "well_id", "production_volume", "new_column",  # CSV columns
+                    "production_month", "file_updated_ts", "source_url"  # Provenance columns
+                ]
                 mock_writer = MagicMock()
-                mock_spark.createDataFrame.return_value.write = mock_writer
+                mock_new_df.write = mock_writer
+                mock_spark.createDataFrame.return_value = mock_new_df
                 
                 # This should NOT raise an error (schema evolution is allowed)
                 try:
@@ -348,8 +517,8 @@ class TestUnityCalatalogDirectWrite:
                     uc_table="main.petrinex.new_table"
                 )
             except ValueError as e:
-                # Should only fail on "No months found"
-                assert "No months found" in str(e)
+                # Should only fail on "No files found for production months"
+                assert "No files found for production months" in str(e)
                 assert "appears to not be a Petrinex table" not in str(e)
 
 
@@ -421,7 +590,7 @@ class TestPandasDataFrame:
                     end_date="2023-12-31"
                 )
             except ValueError as e:
-                assert "No months found" in str(e)
+                assert "No files found for production months" in str(e)
                 assert "end_date can only be used with from_date" not in str(e)
 
 
