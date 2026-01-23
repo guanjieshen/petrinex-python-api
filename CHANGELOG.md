@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.7] - 2026-01-23
 
+### Added
+- **Retry Mechanism**: Configurable retry logic for failed file loads
+  - New `retry_attempts` parameter in `PetrinexClient` (default: 3)
+  - Exponential backoff between retries: 2, 4, 8 seconds
+  - Retries HTTP errors (except 404), network failures, and transient errors
+  - Schema validation errors are never retried (fail immediately)
+  - Example: `client = PetrinexClient(spark=spark, retry_attempts=5)`
+  - Minimum value is 1 (no retries)
+
 ### Changed
 - Version bump for finalized schema conversion implementation
 

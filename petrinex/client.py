@@ -58,6 +58,9 @@ class PetrinexClient:
         - "NGL" (Natural Gas Liquids and Marketable Gas Volumes)
     file_format : str, default "CSV"
         File format: "CSV" or "XML"
+    retry_attempts : int, default 3
+        Number of retry attempts for failed file loads. Uses exponential backoff (2, 4, 8 seconds).
+        Minimum value is 1 (no retries). 404 errors are never retried.
     
     Examples
     --------
@@ -87,6 +90,7 @@ class PetrinexClient:
         request_timeout_s: int = 60,
         user_agent: str = "Mozilla/5.0",
         html_parser: str = "html.parser",  # or "lxml"
+        retry_attempts: int = 3,  # Number of retry attempts for failed file loads
     ):
         self.spark = spark
         self.jurisdiction = jurisdiction.upper()
@@ -100,6 +104,7 @@ class PetrinexClient:
         self.request_timeout_s = request_timeout_s
         self.user_agent = user_agent
         self.html_parser = html_parser
+        self.retry_attempts = max(1, retry_attempts)  # At least 1 attempt
 
         # Validate data_type
         if self.data_type not in SUPPORTED_DATA_TYPES:
@@ -394,127 +399,159 @@ class PetrinexClient:
         skipped_files = []
 
         for idx, f in enumerate(files, 1):
-            try:
-                print(f"Loading {idx}/{len(files)}: {f.production_month}...", end=" ")
-                
-                r = requests.get(f.url, timeout=self.request_timeout_s)
-                r.raise_for_status()
-
-                # Extract CSV from ZIP (handle nested ZIPs)
-                csv_data = self._extract_csv_from_zip(r.content)
-                
-                # Optimized defaults for Petrinex CSV files
-                pdf = pd.read_csv(
-                    io.BytesIO(csv_data),
-                    dtype=str,              # Avoid mixed-type issues
-                    encoding="latin1",      # Handle special characters
-                    on_bad_lines="skip",    # Handle malformed rows
-                    engine="python",        # Robust parsing
-                )
-                
-                # Convert date columns to proper datetime (required for DateType schema fields)
-                # SubmissionDate is defined as DateType in the schema
-                if "SubmissionDate" in pdf.columns:
-                    pdf["SubmissionDate"] = pd.to_datetime(pdf["SubmissionDate"], errors="coerce")
-
-                if add_provenance_columns:
-                    pdf["production_month"] = f.production_month
-                    pdf["file_updated_ts"] = f.updated_ts.strftime(self._TS_FMT)
-                    pdf["source_url"] = f.url
-
-                # Add missing columns from official schema to ensure consistency
-                # All columns get explicit types from schema definition
-                base_schema = get_schema_for_data_type(self.data_type)
-                schema_fields = {field.name: field for field in base_schema.fields}
-                pdf_columns = set(pdf.columns)
-                schema_columns = set(schema_fields.keys())
-                
-                # Add missing schema columns with NULL values
-                missing_cols = schema_columns - pdf_columns
-                if missing_cols:
-                    for col in missing_cols:
-                        pdf[col] = None
-                
-                # Convert to Spark DataFrame without explicit schema first
-                # Then cast columns to correct types
-                # This avoids Arrow conversion issues (string → decimal fails with schema)
-                from pyspark.sql.types import StructType, StructField, StringType
-                from pyspark.sql.functions import col, expr
-                
-                # Create DataFrame without schema - Spark will infer (all strings)
-                sdf = self.spark.createDataFrame(pdf)
-                
-                # Now cast columns to match the official schema
-                # Use try_cast to handle malformed values (e.g., '***') gracefully - they become NULL
-                for col_name, field in schema_fields.items():
-                    if col_name in sdf.columns:
-                        # Get the type as a SQL string for try_cast
-                        type_str = field.dataType.simpleString()
-                        sdf = sdf.withColumn(col_name, expr(f"try_cast(`{col_name}` as {type_str})"))
-                
-                # Write directly to UC table if specified (avoids memory accumulation)
-                if uc_table:
-                    # Check schema compatibility on first file
-                    if uc_table_exists and files_loaded == 0:
-                        # Check if any existing columns are missing from new data (not allowed)
-                        missing_cols = existing_table_columns - set(sdf.columns)
-                        if missing_cols:
-                            raise ValueError(
-                                f"Schema mismatch: Table '{uc_table}' has columns {sorted(missing_cols)} "
-                                f"that are missing in the new data. "
-                                f"Existing columns cannot be removed. "
-                                f"Solutions:\n"
-                                f"  1. Add the missing columns to your data source\n"
-                                f"  2. Drop/recreate the table if you want to change its schema\n"
-                                f"  3. Use a different table name for this new schema"
-                            )
-                        
-                        # Check if new columns are being added (schema evolution - allowed)
-                        new_cols = set(sdf.columns) - existing_table_columns
-                        if new_cols:
-                            print(f"  ℹ️  Schema evolution: Adding {len(new_cols)} new column(s): {sorted(new_cols)}")
-                        else:
-                            print(f"  ✓ Schema matches existing table")
-                    
-                    sdf.write.format("delta") \
-                        .mode("append") \
-                        .option("mergeSchema", "true") \
-                        .option("spark.databricks.delta.schema.autoMerge.enabled", "true") \
-                        .saveAsTable(uc_table)
-                    files_loaded += 1
-                    print(f"✓ ({len(pdf):,} rows) → {uc_table}")
-                else:
-                    # Standard in-memory union
-                    if combined is None:
-                        combined = sdf
+            # Retry loop for each file
+            for attempt in range(1, self.retry_attempts + 1):
+                try:
+                    if attempt == 1:
+                        print(f"Loading {idx}/{len(files)}: {f.production_month}...", end=" ")
                     else:
-                        if union_by_name:
-                            combined = combined.unionByName(sdf, allowMissingColumns=True)
+                        print(f"  Retry {attempt}/{self.retry_attempts}...", end=" ")
+                    
+                    r = requests.get(f.url, timeout=self.request_timeout_s)
+                    r.raise_for_status()
+
+                    # Extract CSV from ZIP (handle nested ZIPs)
+                    csv_data = self._extract_csv_from_zip(r.content)
+                    
+                    # Optimized defaults for Petrinex CSV files
+                    pdf = pd.read_csv(
+                        io.BytesIO(csv_data),
+                        dtype=str,              # Avoid mixed-type issues
+                        encoding="latin1",      # Handle special characters
+                        on_bad_lines="skip",    # Handle malformed rows
+                        engine="python",        # Robust parsing
+                    )
+                    
+                    # Convert date columns to proper datetime (required for DateType schema fields)
+                    # SubmissionDate is defined as DateType in the schema
+                    if "SubmissionDate" in pdf.columns:
+                        pdf["SubmissionDate"] = pd.to_datetime(pdf["SubmissionDate"], errors="coerce")
+
+                    if add_provenance_columns:
+                        pdf["production_month"] = f.production_month
+                        pdf["file_updated_ts"] = f.updated_ts.strftime(self._TS_FMT)
+                        pdf["source_url"] = f.url
+
+                    # Add missing columns from official schema to ensure consistency
+                    # All columns get explicit types from schema definition
+                    base_schema = get_schema_for_data_type(self.data_type)
+                    schema_fields = {field.name: field for field in base_schema.fields}
+                    pdf_columns = set(pdf.columns)
+                    schema_columns = set(schema_fields.keys())
+                    
+                    # Add missing schema columns with NULL values
+                    missing_cols = schema_columns - pdf_columns
+                    if missing_cols:
+                        for col in missing_cols:
+                            pdf[col] = None
+                    
+                    # Convert to Spark DataFrame without explicit schema first
+                    # Then cast columns to correct types
+                    # This avoids Arrow conversion issues (string → decimal fails with schema)
+                    from pyspark.sql.types import StructType, StructField, StringType
+                    from pyspark.sql.functions import col, expr
+                    
+                    # Create DataFrame without schema - Spark will infer (all strings)
+                    sdf = self.spark.createDataFrame(pdf)
+                    
+                    # Now cast columns to match the official schema
+                    # Use try_cast to handle malformed values (e.g., '***') gracefully - they become NULL
+                    for col_name, field in schema_fields.items():
+                        if col_name in sdf.columns:
+                            # Get the type as a SQL string for try_cast
+                            type_str = field.dataType.simpleString()
+                            sdf = sdf.withColumn(col_name, expr(f"try_cast(`{col_name}` as {type_str})"))
+                    
+                    # Write directly to UC table if specified (avoids memory accumulation)
+                    if uc_table:
+                        # Check schema compatibility on first file
+                        if uc_table_exists and files_loaded == 0:
+                            # Check if any existing columns are missing from new data (not allowed)
+                            missing_cols = existing_table_columns - set(sdf.columns)
+                            if missing_cols:
+                                raise ValueError(
+                                    f"Schema mismatch: Table '{uc_table}' has columns {sorted(missing_cols)} "
+                                    f"that are missing in the new data. "
+                                    f"Existing columns cannot be removed. "
+                                    f"Solutions:\n"
+                                    f"  1. Add the missing columns to your data source\n"
+                                    f"  2. Drop/recreate the table if you want to change its schema\n"
+                                    f"  3. Use a different table name for this new schema"
+                                )
+                            
+                            # Check if new columns are being added (schema evolution - allowed)
+                            new_cols = set(sdf.columns) - existing_table_columns
+                            if new_cols:
+                                print(f"  ℹ️  Schema evolution: Adding {len(new_cols)} new column(s): {sorted(new_cols)}")
+                            else:
+                                print(f"  ✓ Schema matches existing table")
+                        
+                        sdf.write.format("delta") \
+                            .mode("append") \
+                            .option("mergeSchema", "true") \
+                            .option("spark.databricks.delta.schema.autoMerge.enabled", "true") \
+                            .saveAsTable(uc_table)
+                        files_loaded += 1
+                        print(f"✓ ({len(pdf):,} rows) → {uc_table}")
+                    else:
+                        # Standard in-memory union
+                        if combined is None:
+                            combined = sdf
                         else:
-                            combined = combined.union(sdf)
-                    
-                    files_loaded += 1
-                    print(f"✓ ({len(pdf):,} rows)")
-                    
-                    # Periodically checkpoint to avoid long lineage (only for in-memory mode)
-                    if files_loaded % 10 == 0:
-                        row_count = combined.count()  # Materialize to break lineage
-                        print(f"  → Checkpointed at {files_loaded} files ({row_count:,} total rows)")
+                            if union_by_name:
+                                combined = combined.unionByName(sdf, allowMissingColumns=True)
+                            else:
+                                combined = combined.union(sdf)
+                        
+                        files_loaded += 1
+                        print(f"✓ ({len(pdf):,} rows)")
+                        
+                        # Periodically checkpoint to avoid long lineage (only for in-memory mode)
+                        if files_loaded % 10 == 0:
+                            row_count = combined.count()  # Materialize to break lineage
+                            print(f"  → Checkpointed at {files_loaded} files ({row_count:,} total rows)")
+                        
+                    # Success - break retry loop
+                    break
                 
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 404:
-                    # File not found - skip it (may not be published yet)
-                    skipped_files.append((f.production_month, "File not found (404)"))
-                    print(f"⚠️  Not found (404)")
-                    continue
-                else:
-                    # Other HTTP errors - re-raise
-                    raise
-            except Exception as e:
-                # Log other errors but continue
-                skipped_files.append((f.production_month, str(e)))
-                print(f"⚠️  Error: {str(e)[:60]}")
-                continue
+                except requests.exceptions.HTTPError as e:
+                    if e.response.status_code == 404:
+                        # File not found - skip it (may not be published yet)
+                        skipped_files.append((f.production_month, "File not found (404)"))
+                        print(f"⚠️  Not found (404)")
+                        break  # Don't retry 404s
+                    else:
+                        # Other HTTP errors - retry if attempts remain
+                        if attempt < self.retry_attempts:
+                            import time
+                            wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                            print(f"⚠️  HTTP Error {e.response.status_code}, retrying in {wait_time}s...")
+                            time.sleep(wait_time)
+                            continue  # Try next attempt
+                        else:
+                            # Out of retries
+                            skipped_files.append((f.production_month, f"HTTP {e.response.status_code} after {self.retry_attempts} attempts"))
+                            print(f"⚠️  Failed after {self.retry_attempts} attempts")
+                            break
+                except Exception as e:
+                    # Check if this is a schema validation error (shouldn't retry)
+                    error_msg = str(e)
+                    if "Schema mismatch" in error_msg or "ValueError" in error_msg:
+                        # Schema errors - don't retry, re-raise immediately
+                        raise
+                    
+                    # Other errors - retry if attempts remain
+                    if attempt < self.retry_attempts:
+                        import time
+                        wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8 seconds
+                        print(f"⚠️  Error: {str(e)[:40]}, retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue  # Try next attempt
+                    else:
+                        # Out of retries - log and skip file
+                        skipped_files.append((f.production_month, f"{str(e)[:80]} (after {self.retry_attempts} attempts)"))
+                        print(f"⚠️  Failed after {self.retry_attempts} attempts: {str(e)[:40]}")
+                        break
         
         # Check if we got any data at all
         if files_loaded == 0:
