@@ -64,12 +64,12 @@ class TestSchemaConversion:
         spark = MagicMock()
         client = PetrinexClient(spark=spark, data_type="Vol")
         
-        # Create CSV with SubmissionDate
-        csv_data = b"""SubmissionDate,Volume
-2025-01-15,123.456
-2025-01-16,789.012"""
+        # Create CSV with date and numeric columns
+        csv_data = b"""SubmissionDate,Volume,Hours,Energy
+2025-01-15,123.456,24,5678.901
+2025-01-16,789.012,22,3456.789"""
         
-        # Read CSV like the client does
+        # Read CSV like the client does (everything as strings)
         pdf = pd.read_csv(
             io.BytesIO(csv_data),
             dtype=str,
@@ -78,18 +78,40 @@ class TestSchemaConversion:
             engine="python",
         )
         
-        # Before conversion fix, SubmissionDate would be string (object)
+        # Before conversion, all columns should be strings (object)
         assert pdf["SubmissionDate"].dtype == object, "Initially should be string"
+        assert pdf["Volume"].dtype == object, "Volume should remain as string"
+        assert pdf["Hours"].dtype == object, "Hours should remain as string"
         
-        # After applying the conversion (like client.py does)
-        if "SubmissionDate" in pdf.columns:
-            pdf["SubmissionDate"] = pd.to_datetime(pdf["SubmissionDate"], errors="coerce")
+        # After applying the conversions (like client.py does)
+        # Note: We only convert DateType columns. Numeric columns remain as strings
+        # because Spark can convert string→decimal but not float64→decimal via Arrow
+        from petrinex.schema import get_volumetrics_schema
+        from pyspark.sql.types import DateType
         
-        # Now should be datetime64
-        assert pdf["SubmissionDate"].dtype == 'datetime64[ns]', \
+        schema = get_volumetrics_schema()
+        schema_fields = {field.name: field for field in schema.fields}
+        
+        for col_name, field in schema_fields.items():
+            if col_name in pdf.columns:
+                if isinstance(field.dataType, DateType):
+                    pdf[col_name] = pd.to_datetime(pdf[col_name], errors="coerce")
+        
+        # Verify: DateType columns converted, numeric columns remain as strings
+        assert pd.api.types.is_datetime64_any_dtype(pdf["SubmissionDate"]), \
             "SubmissionDate should be datetime64 after conversion"
+        assert pdf["Volume"].dtype == object, \
+            "Volume should remain as string (Spark will convert to Decimal)"
+        assert pdf["Hours"].dtype == object, \
+            "Hours should remain as string (Spark will convert to Integer)"
+        assert pdf["Energy"].dtype == object, \
+            "Energy should remain as string (Spark will convert to Decimal)"
         
-        print("✅ Pandas date conversion test passed")
+        print("✅ Pandas type conversion test passed")
+        print(f"   SubmissionDate: {pdf['SubmissionDate'].dtype} (converted to datetime)")
+        print(f"   Volume: {pdf['Volume'].dtype} (kept as string for Spark)")
+        print(f"   Hours: {pdf['Hours'].dtype} (kept as string for Spark)")
+        print(f"   Energy: {pdf['Energy'].dtype} (kept as string for Spark)")
 
 
 if __name__ == "__main__":

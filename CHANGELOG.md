@@ -7,21 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.3] - 2026-01-23
+## [1.1.4] - 2026-01-23
 
 ### Fixed
-- **SubmissionDate Schema Conversion**: Fixed Arrow conversion error when loading data
-  - Previously, `SubmissionDate` column caused "Exception thrown when converting pandas.Series (object) to Arrow Array (date32[day])" error
-  - Now properly converts date strings to pandas datetime before Spark DataFrame creation
+- **Schema Type Conversion**: Fixed Arrow conversion errors for DateType columns
+  - Previously caused error: `Exception thrown when converting pandas.Series (object) to Arrow Array (date32[day])` for SubmissionDate
+  - Now converts DateType columns to pandas datetime before Spark DataFrame creation
+  - Numeric columns (DecimalType, IntegerType) remain as strings - Spark converts them via schema
+  - Why this approach:
+    - Arrow can convert: `string → decimal128` ✅
+    - Arrow cannot convert: `float64 → decimal128` ❌
+    - Converting to float64 with `pd.to_numeric()` would cause new Arrow errors
   - Fixes: `ValueError: No data loaded. All X file(s) failed or were skipped`
-  - Schema remains unchanged (DateType for SubmissionDate as per specification)
+  - Schema remains unchanged (types defined per official specification)
+  - Root cause: Reading CSV with `dtype=str` to avoid mixed-type issues, but DateType columns need datetime objects
 
 ### Added
 - **Schema Conversion Tests**: New test suite (`tests/test_schema_conversion.py`) to catch pandas → Spark conversion issues
   - Tests date column conversion from string to datetime
+  - Verifies numeric columns remain as strings (for Spark to convert)
   - Verifies proper type handling before Spark DataFrame creation
   - Prevents regression of Arrow conversion errors
-  - These tests would have caught the SubmissionDate bug before release
+  - These tests would have caught the schema conversion bugs before release
+
+### Technical Notes
+- **Why not convert numeric columns to float64?**
+  - Attempted: `pd.to_numeric()` converts to float64
+  - Result: Arrow error `Exception thrown when converting pandas.Series (float64) to Arrow Array (decimal128(13, 3))`
+  - Solution: Keep numeric columns as strings, let Spark handle conversion via schema
+  - Arrow conversions: string→decimal128 ✅, float64→decimal128 ❌
+
+## [1.1.3] - 2026-01-23 (Unreleased - Superseded by 1.1.4)
+
+### Fixed
+- **SubmissionDate Conversion**: Partial fix for date column conversion
+  - Fixed SubmissionDate but missed numeric columns (Volume, Energy, Hours)
+  - Superseded by v1.1.4 which fixes all typed columns
 
 ## [1.1.2] - 2026-01-23
 

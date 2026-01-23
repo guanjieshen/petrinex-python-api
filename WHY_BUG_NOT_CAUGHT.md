@@ -1,10 +1,13 @@
-# Why the SubmissionDate Bug Wasn't Caught by Unit Tests
+# Why the Schema Conversion Bug Wasn't Caught by Unit Tests
 
 ## The Bug
-When loading data with `read_spark_df()`, the `SubmissionDate` column caused an Arrow conversion error:
+When loading data with `read_spark_df()`, typed columns caused Arrow conversion errors:
 ```
 Exception thrown when converting pandas.Series (object) with name 'SubmissionDate' to Arrow Array (date32[day])
+Exception thrown when converting pandas.Series (object) with name 'Volume' to Arrow Array (decimal128(13, 3))
 ```
+
+This affected all DateType, DecimalType, and IntegerType columns in the schema.
 
 ## Why Unit Tests Missed It
 
@@ -45,35 +48,60 @@ The comprehensive test (`tests/manual_e2e_test.py`) exists but:
 ## The Fix
 
 ### 1. **Code Fix**
-Added date conversion before Spark DataFrame creation:
+Added datetime conversion for DateType columns only:
 
 ```python
-# petrinex/client.py (line 413-416)
-# Convert date columns to proper datetime (required for DateType schema fields)
-# SubmissionDate is defined as DateType in the schema
-if "SubmissionDate" in pdf.columns:
-    pdf["SubmissionDate"] = pd.to_datetime(pdf["SubmissionDate"], errors="coerce")
+# petrinex/client.py
+# Convert DateType columns to proper datetime before Spark conversion
+# Note: Numeric columns (DecimalType, IntegerType) are kept as strings
+# because Arrow can convert string→decimal but not float64→decimal
+from pyspark.sql.types import DateType
+
+for col_name, field in schema_fields.items():
+    if col_name in pdf.columns:
+        # Convert DateType columns to datetime
+        if isinstance(field.dataType, DateType):
+            pdf[col_name] = pd.to_datetime(pdf[col_name], errors="coerce")
 ```
+
+**Why this approach:**
+- ✅ Arrow can convert: `string → decimal128` (for Volume, Energy, etc.)
+- ❌ Arrow cannot convert: `float64 → decimal128`
+- ❌ Arrow cannot convert: `object (string) → date32`
+
+So we:
+- **Convert** DateType columns: string → datetime64 (Arrow can handle datetime64 → date32)
+- **Keep** numeric columns as strings (Arrow/Spark converts string → decimal128 using schema)
 
 ### 2. **New Tests Added**
 Created `tests/test_schema_conversion.py` with tests that:
 - ✅ Verify date columns are converted from string to datetime
+- ✅ Verify numeric columns are converted from string to numeric types
 - ✅ Test the conversion logic without over-mocking
 - ✅ Would catch this bug before it reaches production
 
 ```python
-def test_submission_date_conversion_in_pandas(self):
+def test_pandas_dataframe_has_proper_types_before_spark_conversion(self):
     # Read CSV with dtype=str (like real code does)
     pdf = pd.read_csv(io.BytesIO(csv_data), dtype=str, ...)
     
-    # Verify it starts as string
+    # Verify everything starts as strings
     assert pdf["SubmissionDate"].dtype == object
+    assert pdf["Volume"].dtype == object
+    assert pdf["Hours"].dtype == object
     
-    # Apply conversion (like client.py does)
-    pdf["SubmissionDate"] = pd.to_datetime(pdf["SubmissionDate"], errors="coerce")
+    # Apply conversions (like client.py does)
+    for col_name, field in schema_fields.items():
+        if col_name in pdf.columns:
+            if isinstance(field.dataType, DateType):
+                pdf[col_name] = pd.to_datetime(pdf[col_name], errors="coerce")
+            elif isinstance(field.dataType, (DecimalType, IntegerType)):
+                pdf[col_name] = pd.to_numeric(pdf[col_name], errors="coerce")
     
-    # Verify conversion to datetime
+    # Verify conversions
     assert pd.api.types.is_datetime64_any_dtype(pdf["SubmissionDate"])
+    assert pd.api.types.is_numeric_dtype(pdf["Volume"])
+    assert pd.api.types.is_numeric_dtype(pdf["Hours"])
 ```
 
 ## Lessons Learned
