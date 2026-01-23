@@ -82,7 +82,10 @@ Spark's capabilities with .cast():
 **Solution:**
 1. Convert dates in pandas (before Spark): string → datetime64
 2. Create DataFrame without schema (let Spark infer - everything is string except dates)
-3. Cast columns after creation (Spark handles string → decimal/integer conversions)
+3. Cast columns after creation using `try_cast` (Spark handles string → decimal/integer conversions)
+   - **Important**: Use `try_cast` not `cast` to handle malformed values like `'***'`
+   - `try_cast` converts malformed values to NULL instead of throwing errors
+   - Real Petrinex data contains `'***'` as placeholder for missing values
 
 ### 2. **New Tests Added**
 Created `tests/test_schema_conversion.py` with tests that:

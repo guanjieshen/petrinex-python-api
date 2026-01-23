@@ -439,15 +439,18 @@ class PetrinexClient:
                 # Then cast columns to correct types
                 # This avoids Arrow conversion issues (string → decimal fails with schema)
                 from pyspark.sql.types import StructType, StructField, StringType
-                from pyspark.sql.functions import col
+                from pyspark.sql.functions import col, expr
                 
                 # Create DataFrame without schema - Spark will infer (all strings)
                 sdf = self.spark.createDataFrame(pdf)
                 
                 # Now cast columns to match the official schema
+                # Use try_cast to handle malformed values (e.g., '***') gracefully - they become NULL
                 for col_name, field in schema_fields.items():
                     if col_name in sdf.columns:
-                        sdf = sdf.withColumn(col_name, col(col_name).cast(field.dataType))
+                        # Get the type as a SQL string for try_cast
+                        type_str = field.dataType.simpleString()
+                        sdf = sdf.withColumn(col_name, expr(f"try_cast(`{col_name}` as {type_str})"))
                 
                 # Write directly to UC table if specified (avoids memory accumulation)
                 if uc_table:

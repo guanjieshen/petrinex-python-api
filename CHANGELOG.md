@@ -9,8 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.6] - 2026-01-23
 
-### Changed
-- Version bump for updated schema conversion implementation
+### Fixed
+- **Malformed Value Handling**: Use `try_cast` instead of `cast` to handle malformed values gracefully
+  - Some data contains `'***'` as placeholder for missing/null values
+  - Previous `.cast()` would fail with: `The value '***' of the type "STRING" cannot be cast to "DECIMAL(13,3)" because it is malformed`
+  - Now uses `try_cast()` which converts malformed values to NULL instead of failing
+  - Implementation: `expr(f"try_cast(`{col_name}` as {type_str})")`
+  - This allows data loading to succeed even with malformed placeholder values
 
 ## [1.1.5] - 2026-01-23
 
