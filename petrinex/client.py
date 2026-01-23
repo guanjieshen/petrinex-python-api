@@ -768,21 +768,41 @@ class PetrinexClient:
         if end_date is not None and from_date is None:
             raise ValueError("end_date can only be used with from_date")
         
-        files = self.list_updated_after(date_param)
-        
-        # Filter by end_date if specified
-        if end_date is not None:
-            end_cutoff = datetime.strptime(end_date, self._DATE_FMT)
+        # Different behavior for from_date vs updated_after/since
+        if from_date is not None:
+            # For from_date: get ALL available files, then filter by production month
+            # Use a very old date to retrieve all files regardless of update timestamp
+            files = self.list_updated_after("1900-01-01")
+            
+            # Filter by production month >= from_date
+            from_cutoff = datetime.strptime(from_date, self._DATE_FMT)
             files = [
                 f for f in files
-                if datetime.strptime(f.production_month + "-01", self._DATE_FMT) <= end_cutoff
+                if datetime.strptime(f.production_month + "-01", self._DATE_FMT) >= from_cutoff
             ]
+            
+            # Filter by production month <= end_date if specified
+            if end_date is not None:
+                end_cutoff = datetime.strptime(end_date, self._DATE_FMT)
+                files = [
+                    f for f in files
+                    if datetime.strptime(f.production_month + "-01", self._DATE_FMT) <= end_cutoff
+                ]
+        else:
+            # For updated_after/since: filter by file update timestamp
+            files = self.list_updated_after(date_param)
         
         if not files:
-            raise ValueError(
-                f"No months found with Updated Date > {date_param}. "
-                f"Try an earlier date (e.g., 6 months ago)."
-            )
+            if from_date:
+                raise ValueError(
+                    f"No files found for production months from {from_date}"
+                    + (f" to {end_date}" if end_date else "")
+                )
+            else:
+                raise ValueError(
+                    f"No months found with Updated Date > {date_param}. "
+                    f"Try an earlier date (e.g., 6 months ago)."
+                )
         
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
