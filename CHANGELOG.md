@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-01-23
+
+### Fixed
+- **Date Filtering Bug**: Fixed `from_date` and `end_date` parameters to correctly filter by production month
+  - Previously, `from_date` was incorrectly filtering by file update timestamp instead of production month
+  - This caused `from_date="2025-01-01"` to load all files from 2022 onwards (incorrect)
+  - Now correctly filters to only load files with production months >= `from_date` and <= `end_date`
+  - Affects both `read_spark_df()` and `download_files()` methods
+  - Example: `from_date="2025-01-01", end_date="2025-01-02"` now correctly loads only January 2025 data
+  - Existing `updated_after` and `since` parameters continue to work correctly (filter by file update timestamp)
+
 ### Changed
 - **Repository Cleanup**: Streamlined repository structure for better maintainability
   - Moved `manual_e2e_test.py` to `tests/` directory
