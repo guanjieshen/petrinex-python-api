@@ -43,7 +43,7 @@ from petrinex.schema import (
     get_schema_for_data_type,
 )
 
-__version__ = "1.1.6"
+__version__ = "1.1.7"
 __all__ = [
     "PetrinexClient",
     "PetrinexVolumetricsClient",  # Backward compatibility
