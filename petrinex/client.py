@@ -435,21 +435,19 @@ class PetrinexClient:
                     for col in missing_cols:
                         pdf[col] = None
                 
-                # Convert to Spark DataFrame with explicit schema
-                # Build schema: official schema columns + extra columns (e.g., provenance)
+                # Convert to Spark DataFrame without explicit schema first
+                # Then cast columns to correct types
+                # This avoids Arrow conversion issues (string → decimal fails with schema)
                 from pyspark.sql.types import StructType, StructField, StringType
-                actual_fields = []
+                from pyspark.sql.functions import col
                 
-                # First, add columns in the order they appear in pandas DataFrame
-                for col in pdf.columns:
-                    if col in schema_fields:
-                        actual_fields.append(schema_fields[col])
-                    else:
-                        # For columns not in base schema (e.g., provenance), use StringType
-                        actual_fields.append(StructField(col, StringType(), True))
+                # Create DataFrame without schema - Spark will infer (all strings)
+                sdf = self.spark.createDataFrame(pdf)
                 
-                actual_schema = StructType(actual_fields)
-                sdf = self.spark.createDataFrame(pdf, schema=actual_schema)
+                # Now cast columns to match the official schema
+                for col_name, field in schema_fields.items():
+                    if col_name in sdf.columns:
+                        sdf = sdf.withColumn(col_name, col(col_name).cast(field.dataType))
                 
                 # Write directly to UC table if specified (avoids memory accumulation)
                 if uc_table:

@@ -48,30 +48,41 @@ The comprehensive test (`tests/manual_e2e_test.py`) exists but:
 ## The Fix
 
 ### 1. **Code Fix**
-Added datetime conversion for DateType columns only:
+Changed approach: Create DataFrame without schema, then cast columns:
 
 ```python
 # petrinex/client.py
-# Convert DateType columns to proper datetime before Spark conversion
-# Note: Numeric columns (DecimalType, IntegerType) are kept as strings
-# because Arrow can convert string→decimal but not float64→decimal
-from pyspark.sql.types import DateType
 
+# Step 1: Convert SubmissionDate to datetime in pandas
+if "SubmissionDate" in pdf.columns:
+    pdf["SubmissionDate"] = pd.to_datetime(pdf["SubmissionDate"], errors="coerce")
+
+# Step 2: Create Spark DataFrame WITHOUT explicit schema
+# Spark will infer types (everything becomes StringType except SubmissionDate which is TimestampType)
+sdf = self.spark.createDataFrame(pdf)
+
+# Step 3: Cast columns to match official schema types
 for col_name, field in schema_fields.items():
-    if col_name in pdf.columns:
-        # Convert DateType columns to datetime
-        if isinstance(field.dataType, DateType):
-            pdf[col_name] = pd.to_datetime(pdf[col_name], errors="coerce")
+    if col_name in sdf.columns:
+        sdf = sdf.withColumn(col_name, col(col_name).cast(field.dataType))
 ```
 
-**Why this approach:**
-- ✅ Arrow can convert: `string → decimal128` (for Volume, Energy, etc.)
-- ❌ Arrow cannot convert: `float64 → decimal128`
-- ❌ Arrow cannot convert: `object (string) → date32`
+**Why this approach works:**
 
-So we:
-- **Convert** DateType columns: string → datetime64 (Arrow can handle datetime64 → date32)
-- **Keep** numeric columns as strings (Arrow/Spark converts string → decimal128 using schema)
+Arrow's limitations during createDataFrame():
+- ❌ Arrow cannot: `string → decimal128` (when schema provided to createDataFrame)
+- ❌ Arrow cannot: `float64 → decimal128` (when schema provided to createDataFrame)
+- ❌ Arrow cannot: `object (string) → date32` (when schema provided to createDataFrame)
+
+Spark's capabilities with .cast():
+- ✅ Spark CAN: `string → decimal128` (using .cast() after DataFrame creation)
+- ✅ Spark CAN: `string → integer` (using .cast() after DataFrame creation)
+- ✅ Spark CAN: `timestamp → date` (using .cast() after DataFrame creation)
+
+**Solution:**
+1. Convert dates in pandas (before Spark): string → datetime64
+2. Create DataFrame without schema (let Spark infer - everything is string except dates)
+3. Cast columns after creation (Spark handles string → decimal/integer conversions)
 
 ### 2. **New Tests Added**
 Created `tests/test_schema_conversion.py` with tests that:

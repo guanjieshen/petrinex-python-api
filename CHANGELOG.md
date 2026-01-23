@@ -10,13 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.5] - 2026-01-23
 
 ### Fixed
-- **SubmissionDate Conversion**: Fixed Arrow conversion error for SubmissionDate column
-  - Previously caused error: `Exception thrown when converting pandas.Series (object) to Arrow Array (date32[day])`
-  - Now converts SubmissionDate to pandas datetime before Spark DataFrame creation
-  - Simple, focused fix: `pd.to_datetime(pdf["SubmissionDate"], errors="coerce")`
-  - Other columns remain as strings for Spark to convert via schema
+- **Schema Type Conversion**: Fixed Arrow conversion errors for all typed columns (DateType, DecimalType, IntegerType)
+  - Previously caused errors:
+    - `Exception thrown when converting pandas.Series (object) to Arrow Array (date32[day])` for SubmissionDate
+    - `Exception thrown when converting pandas.Series (object) to Arrow Array (decimal128(13, 3))` for Volume, Energy, etc.
+  - New approach: Create DataFrame without schema, then cast columns to correct types
+  - Why this works:
+    - Arrow cannot handle: `string → decimal` or `float64 → decimal` when passed as schema to createDataFrame()
+    - But Spark CAN handle: `string → decimal` when using `.cast()` method
+  - Implementation:
+    1. Convert SubmissionDate to datetime in pandas: `pd.to_datetime()`
+    2. Create Spark DataFrame without schema: `spark.createDataFrame(pdf)` - all columns inferred as strings
+    3. Cast columns to correct types: `sdf.withColumn(col_name, col(col_name).cast(field.dataType))`
   - Fixes: `ValueError: No data loaded. All X file(s) failed or were skipped`
-  - Root cause: Reading CSV with `dtype=str` to avoid mixed-type issues, but DateType columns need datetime objects
+  - Root cause: Arrow's limitations when converting types during DataFrame creation with explicit schema
 
 ## [1.1.4] - 2026-01-23 (Superseded by 1.1.5)
 
