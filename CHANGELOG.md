@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-01-23
+
+### Fixed
+- **SubmissionDate Schema Conversion**: Fixed Arrow conversion error when loading data
+  - Previously, `SubmissionDate` column caused "Exception thrown when converting pandas.Series (object) to Arrow Array (date32[day])" error
+  - Now properly converts date strings to pandas datetime before Spark DataFrame creation
+  - Fixes: `ValueError: No data loaded. All X file(s) failed or were skipped`
+  - Schema remains unchanged (DateType for SubmissionDate as per specification)
+
+### Added
+- **Schema Conversion Tests**: New test suite (`tests/test_schema_conversion.py`) to catch pandas → Spark conversion issues
+  - Tests date column conversion from string to datetime
+  - Verifies proper type handling before Spark DataFrame creation
+  - Prevents regression of Arrow conversion errors
+  - These tests would have caught the SubmissionDate bug before release
+
 ## [1.1.2] - 2026-01-23
 
 ### Fixed

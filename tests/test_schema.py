@@ -11,7 +11,7 @@ These tests verify that:
 
 import pytest
 from pyspark.sql.types import (
-    StructType, StringType, DecimalType, IntegerType, DateType, VoidType
+    StructType, StringType, DecimalType, IntegerType, DateType
 )
 
 from petrinex.schema import (

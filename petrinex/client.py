@@ -411,6 +411,11 @@ class PetrinexClient:
                     on_bad_lines="skip",    # Handle malformed rows
                     engine="python",        # Robust parsing
                 )
+                
+                # Convert date columns to proper datetime (required for DateType schema fields)
+                # SubmissionDate is defined as DateType in the schema
+                if "SubmissionDate" in pdf.columns:
+                    pdf["SubmissionDate"] = pd.to_datetime(pdf["SubmissionDate"], errors="coerce")
 
                 if add_provenance_columns:
                     pdf["production_month"] = f.production_month
