@@ -412,21 +412,10 @@ class PetrinexClient:
                     engine="python",        # Robust parsing
                 )
                 
-                # Get schema to determine which columns need type conversion
-                base_schema = get_schema_for_data_type(self.data_type)
-                schema_fields = {field.name: field for field in base_schema.fields}
-                
-                # Convert DateType columns to proper datetime before Spark conversion
-                # Note: We only convert DateType columns. Numeric columns (DecimalType, IntegerType)
-                # are kept as strings and Spark will convert them according to the schema.
-                # This is because Arrow can convert string→decimal but not float64→decimal.
-                from pyspark.sql.types import DateType
-                
-                for col_name, field in schema_fields.items():
-                    if col_name in pdf.columns:
-                        # Convert DateType columns to datetime
-                        if isinstance(field.dataType, DateType):
-                            pdf[col_name] = pd.to_datetime(pdf[col_name], errors="coerce")
+                # Convert date columns to proper datetime (required for DateType schema fields)
+                # SubmissionDate is defined as DateType in the schema
+                if "SubmissionDate" in pdf.columns:
+                    pdf["SubmissionDate"] = pd.to_datetime(pdf["SubmissionDate"], errors="coerce")
 
                 if add_provenance_columns:
                     pdf["production_month"] = f.production_month
@@ -435,6 +424,8 @@ class PetrinexClient:
 
                 # Add missing columns from official schema to ensure consistency
                 # All columns get explicit types from schema definition
+                base_schema = get_schema_for_data_type(self.data_type)
+                schema_fields = {field.name: field for field in base_schema.fields}
                 pdf_columns = set(pdf.columns)
                 schema_columns = set(schema_fields.keys())
                 

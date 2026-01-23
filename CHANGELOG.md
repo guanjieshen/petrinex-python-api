@@ -7,20 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.4] - 2026-01-23
+## [1.1.5] - 2026-01-23
 
 ### Fixed
-- **Schema Type Conversion**: Fixed Arrow conversion errors for DateType columns
-  - Previously caused error: `Exception thrown when converting pandas.Series (object) to Arrow Array (date32[day])` for SubmissionDate
-  - Now converts DateType columns to pandas datetime before Spark DataFrame creation
-  - Numeric columns (DecimalType, IntegerType) remain as strings - Spark converts them via schema
-  - Why this approach:
-    - Arrow can convert: `string → decimal128` ✅
-    - Arrow cannot convert: `float64 → decimal128` ❌
-    - Converting to float64 with `pd.to_numeric()` would cause new Arrow errors
+- **SubmissionDate Conversion**: Fixed Arrow conversion error for SubmissionDate column
+  - Previously caused error: `Exception thrown when converting pandas.Series (object) to Arrow Array (date32[day])`
+  - Now converts SubmissionDate to pandas datetime before Spark DataFrame creation
+  - Simple, focused fix: `pd.to_datetime(pdf["SubmissionDate"], errors="coerce")`
+  - Other columns remain as strings for Spark to convert via schema
   - Fixes: `ValueError: No data loaded. All X file(s) failed or were skipped`
-  - Schema remains unchanged (types defined per official specification)
   - Root cause: Reading CSV with `dtype=str` to avoid mixed-type issues, but DateType columns need datetime objects
+
+## [1.1.4] - 2026-01-23 (Superseded by 1.1.5)
+
+### Fixed
+- Attempted comprehensive schema conversion but reverted to simpler approach in v1.1.5
 
 ### Added
 - **Schema Conversion Tests**: New test suite (`tests/test_schema_conversion.py`) to catch pandas → Spark conversion issues
